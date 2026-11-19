@@ -27,7 +27,8 @@ csrf.exempt(bp)
 SOURCE = "api"
 # Collection de l'adresse (/factures, /devis) → types de pièces qu'elle sert.
 COLLECTIONS = {"factures": Invoice.BILLING_KINDS, "devis": (Invoice.QUOTE,)}
-EMAIL = r"^[^@\s]+@[^@\s]+\.[^@\s]+$"
+# Domaine en morceaux séparés par des points : sans ambiguïté, donc sans retour arrière coûteux.
+EMAIL = r"[^@\s]+@[^@\s.]+(?:\.[^@\s.]+)+"
 MAX_BODY = 512 * 1024
 PER_PAGE, MAX_PER_PAGE = 50, 200
 _rate = Limiter("api", 600, 60)
