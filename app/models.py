@@ -283,13 +283,7 @@ class Issuer(ArchivableMixin, TimestampMixin, db.Model):
     default_vat_rate = db.Column(db.Numeric(5, 2), nullable=False, default=Decimal("20.00"))
     # Mention imprimée sous les totaux (vide : celle du régime).
     vat_mention = db.Column(db.String(255))
-    # Numérotation : un format par série (services/numbering.py), FA-{AAAA}-{NNNN} → FA-2026-0001.
-    invoice_format = db.Column(
-        db.String(40), nullable=False, default="FA-{AAAA}-{NNNN}", server_default="FA-{AAAA}-{NNNN}"
-    )
-    credit_format = db.Column(
-        db.String(40), nullable=False, default="AV-{AAAA}-{NNNN}", server_default="AV-{AAAA}-{NNNN}"
-    )
+    # Numérotation (services/numbering.py) : factures et avoirs par série (NumberSeries), devis ici.
     quote_format = db.Column(
         db.String(40), nullable=False, default="DE-{AAAA}-{NNNN}", server_default="DE-{AAAA}-{NNNN}"
     )
@@ -313,6 +307,21 @@ class Issuer(ArchivableMixin, TimestampMixin, db.Model):
     email_subject = db.Column(db.String(200))
     email_body = db.Column(db.Text)
 
+    series = db.relationship(
+        "NumberSeries",
+        back_populates="issuer",
+        order_by="(NumberSeries.is_default.desc(), NumberSeries.name)",
+        lazy="selectin",
+    )
+
+    @property
+    def default_series(self):
+        return next((s for s in self.series if s.is_default), None)
+
+    @property
+    def active_series(self):
+        return [s for s in self.series if not s.archived]
+
     @property
     def subject_to_vat(self):
         return self.vat_regime == self.SUBJECT
@@ -329,11 +338,36 @@ class Issuer(ArchivableMixin, TimestampMixin, db.Model):
         return f"<Issuer {self.code}>"
 
 
+class NumberSeries(ArchivableMixin, TimestampMixin, db.Model):
+    """Série de numérotation des factures et avoirs d'un émetteur (« Générale », « CE »…), choisie sur chaque facture.
+    Chaque série a ses numéros, continus et sans trou ; une seule est la série par défaut."""
+
+    __table_args__ = (
+        db.UniqueConstraint("issuer_id", "code", name="uq_number_series_issuer_code"),
+        db.Index("uq_number_series_default", "issuer_id", unique=True, postgresql_where=db.text("is_default")),
+    )
+
+    id = db.Column(db.Integer, primary_key=True)
+    issuer_id = db.Column(db.ForeignKey("issuer.id", ondelete="RESTRICT"), nullable=False, index=True)
+    code = db.Column(db.String(30), nullable=False)  # pour l'API : "series": "ce"
+    name = db.Column(db.String(80), nullable=False)
+    invoice_format = db.Column(db.String(40), nullable=False)
+    credit_format = db.Column(db.String(40), nullable=False)
+    is_default = db.Column(db.Boolean, nullable=False, default=False, server_default="0")
+
+    issuer = db.relationship("Issuer", back_populates="series")
+
+    def __repr__(self):
+        return f"<NumberSeries {self.code}>"
+
+
 class NumberSequence(db.Model):
     """Dernier numéro attribué, par émetteur, type de pièce et période. Lu et incrémenté sous verrou : pas de trou."""
 
     issuer_id = db.Column(db.ForeignKey("issuer.id", ondelete="RESTRICT"), primary_key=True)
     kind = db.Column(db.String(10), primary_key=True)  # Invoice.INVOICE, Invoice.CREDIT ou Invoice.QUOTE
+    # NumberSeries.id pour les factures et avoirs ; 0 pour les devis (une seule série par émetteur).
+    series_id = db.Column(db.Integer, primary_key=True, default=0, server_default="0", autoincrement=False)
     # « 2026 », « 2026-11 » ou « » (jamais remis à zéro), selon le format de la série.
     period = db.Column(db.String(7), primary_key=True)
     last_number = db.Column(db.Integer, nullable=False, default=0)
@@ -435,6 +469,8 @@ class Invoice(TimestampMixin, db.Model):
     kind = db.Column(db.String(10), nullable=False, default=INVOICE)
     status = db.Column(db.String(12), nullable=False, default=DRAFT, index=True)
     issuer_id = db.Column(db.ForeignKey("issuer.id", ondelete="RESTRICT"), nullable=False, index=True)
+    # Série de numérotation d'une facture ou d'un avoir (celle de sa facture) ; vide pour un devis.
+    series_id = db.Column(db.ForeignKey("number_series.id", ondelete="RESTRICT"), index=True)
     # Vide : destinataire ponctuel, saisi sur la pièce sans fiche client (ses coordonnées sont dans customer_snapshot).
     customer_id = db.Column(db.ForeignKey("customer.id", ondelete="RESTRICT"), index=True)
     number = db.Column(db.String(40), unique=True)
@@ -477,6 +513,7 @@ class Invoice(TimestampMixin, db.Model):
     idempotency_key = db.Column(db.String(80), unique=True)
 
     issuer = db.relationship("Issuer")
+    series = db.relationship("NumberSeries")
     customer = db.relationship("Customer", back_populates="invoices")
     lines = db.relationship(
         "InvoiceLine", back_populates="invoice", order_by="InvoiceLine.position", cascade="all, delete-orphan"

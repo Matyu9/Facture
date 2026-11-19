@@ -1,0 +1,37 @@
+{% extends "base.html" %}
+{% from "partials/_form.html" import field %}
+{% block title %}{{ series.name if series else "Nouvelle série" }} · {{ issuer.name }}{% endblock %}
+{% block content %}
+<p><a href="{{ url_for('issuers.numbers', issuer_id=issuer.id) }}">← Numérotation · {{ issuer.name }}</a></p>
+<div class="page-head">
+  <div>
+    <h1>{{ "Série « " ~ series.name ~ " »" if series else "Nouvelle série de factures" }}</h1>
+    <p class="muted">{{ issuer.name }} · ses factures et ses avoirs ont leurs propres numéros, continus et sans trou.</p>
+  </div>
+</div>
+<form method="post" novalidate>
+  {{ form.hidden_tag() }}
+  <section class="card">
+    <div class="grid">
+      <div>{{ field(form.name, placeholder="Comités d'entreprise") }}</div>
+      <div>{{ field(form.code, placeholder="ce") }}<small class="muted">{{ form.code.description }}</small></div>
+    </div>
+    <label>{{ form.is_default() }} {{ form.is_default.label.text }}</label>
+    {% if form.is_default.errors %}<small class="error">{{ form.is_default.errors | join(" ") }}</small>{% endif %}
+  </section>
+  <section class="card">
+    <h2>Factures</h2>
+    {% with fname="invoice_format", example=examples.invoice_format, placeholder="CE-{AAAA}-{NNNN}" %}{% include "issuers/_format_pair.html" %}{% endwith %}
+  </section>
+  <section class="card">
+    <h2>Avoirs</h2>
+    {% with fname="credit_format", example=examples.credit_format, placeholder="CE-AV-{AAAA}-{NNNN}" %}{% include "issuers/_format_pair.html" %}{% endwith %}
+  </section>
+  <p class="muted small">Prochain numéro : pour reprendre une série commencée dans un autre outil. Vaut pour la période en cours.{% if issued %} <strong>Des pièces de cette série sont déjà émises</strong> : évitez de changer de format en cours d'année.{% endif %}</p>
+  <div class="actions">
+    <button type="submit">Enregistrer</button>
+    <a href="{{ url_for('issuers.numbers', issuer_id=issuer.id) }}" role="button" class="secondary outline">Annuler</a>
+  </div>
+</form>
+{% include "issuers/_format_help.html" %}
+{% endblock %}

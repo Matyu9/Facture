@@ -137,10 +137,16 @@ def default(kind):
     return {Invoice.CREDIT: "AV-{AAAA}-{NNNN}", Invoice.QUOTE: "DE-{AAAA}-{NNNN}"}.get(kind, "FA-{AAAA}-{NNNN}")
 
 
-def of(issuer, kind):
+def of(issuer, kind, series=None):
+    """Format de la série : celui des devis de l'émetteur, ou celui des factures ou avoirs de la série (par défaut,
+    sa série par défaut)."""
     from ..models import Invoice
 
-    text = {Invoice.CREDIT: issuer.credit_format, Invoice.QUOTE: issuer.quote_format}.get(kind, issuer.invoice_format)
+    if kind == Invoice.QUOTE:
+        text = issuer.quote_format
+    else:
+        series = series or issuer.default_series
+        text = None if series is None else series.credit_format if kind == Invoice.CREDIT else series.invoice_format
     try:
         return parse(text or default(kind))
     except FormatError:

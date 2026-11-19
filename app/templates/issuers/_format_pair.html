@@ -1,0 +1,8 @@
+{#- Un format et son prochain numéro, avec l'exemple recalculé pendant la saisie (l'événement « input » remonte ici). -#}
+{% set f = form[fname] %}{% set n = form[fname | replace("_format", "_next")] %}
+{% set sample, reset, error = example %}
+<div class="grid" hx-get="{{ url_for('issuers.number_example', issuer_id=issuer.id, serie=fname) }}" hx-trigger="input delay:300ms" hx-target="#{{ fname }}-example" hx-include="#{{ f.id }}, #{{ n.id }}">
+  <div>{{ field(f, placeholder=placeholder) }}</div>
+  <div>{{ field(n) }}</div>
+</div>
+<div id="{{ fname }}-example">{% include "issuers/_number_example.html" %}</div>

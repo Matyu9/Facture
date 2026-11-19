@@ -96,7 +96,10 @@ ACCESS = {
     "products.index": VIEW,
     **{f"products.{name}": EDIT for name in ("create", "edit", "archive")},
     **{f"issuers.{name}": VIEW for name in ("index", "detail", "logo_file", "preview")},
-    **{f"issuers.{name}": ISSUER for name in ("create", "edit", "archive", "layout", "numbers", "number_example")},
+    **{
+        f"issuers.{name}": ISSUER
+        for name in ("create", "edit", "archive", "layout", "numbers", "number_example", "series", "archive_series")
+    },
     **{
         f"api.{name}": API
         for name in (
@@ -138,6 +141,7 @@ ARGUMENTS = {
     "customer_id": 999,
     "product_id": 999,
     "issuer_id": 999,
+    "series_id": 999,
     "quote_id": 999,
     "action": "accepter",
     "token_id": 999,

@@ -17,6 +17,12 @@
     <option value="">Tous les émetteurs</option>
     {% for i in issuers %}<option value="{{ i.id }}" {{ "selected" if params.emetteur == i.id }}>{{ i.name }}</option>{% endfor %}
   </select>
+  {% if all_series %}
+  <select name="serie" aria-label="Série" data-autosubmit>
+    <option value="">Toutes les séries</option>
+    {% for id, label in all_series %}<option value="{{ id }}" {{ "selected" if params.serie == id }}>{{ label }}</option>{% endfor %}
+  </select>
+  {% endif %}
   <select name="etat" aria-label="État" data-autosubmit>
     <option value="">Tous les états</option>
     {% for key, label in states.items() %}<option value="{{ key }}" {{ "selected" if params.etat == key }}>{{ label }}</option>{% endfor %}

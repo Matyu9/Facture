@@ -144,8 +144,16 @@ def test_a_failed_transaction_gives_its_number_back(issuer, customer):
 
 def test_the_sequence_row_is_locked_until_the_issuing_transaction_ends(issuer, customer):
     """Deux émissions simultanées ne peuvent pas lire le même dernier numéro : la seconde attend la première."""
+    series = billing.default_series(issuer)
+    db.session.flush()
     db.session.add(
-        NumberSequence(issuer_id=issuer.id, kind=Invoice.INVOICE, period=str(date.today().year), last_number=4)
+        NumberSequence(
+            issuer_id=issuer.id,
+            kind=Invoice.INVOICE,
+            series_id=series.id,
+            period=str(date.today().year),
+            last_number=4,
+        )
     )
     db.session.commit()
     invoice = make_draft(issuer, customer, 1000)

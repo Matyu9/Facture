@@ -16,7 +16,7 @@
     <td data-label="Émetteur"><span><a href="{{ url_for('issuers.detail', issuer_id=i.id) }}">{{ i.name }}</a>{% if i.archived %} <span class="badge">archivé</span>{% endif %}<br><small class="muted">{{ i.legal_name }}</small></span></td>
     <td data-label="Code"><code>{{ i.code }}</code></td>
     <td data-label="TVA">{{ i.regime_label }}</td>
-    <td data-label="Numérotation"><code>{{ i.invoice_format }}</code></td>
+    <td data-label="Numérotation">{% for s in i.active_series %}<code>{{ s.invoice_format }}</code>{{ "<br>" | safe if not loop.last }}{% endfor %}</td>
     <td data-label="Pièces">{{ counts.get(i.id, 0) }}</td>
   </tr>
   {% else %}

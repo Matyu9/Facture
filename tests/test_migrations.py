@@ -213,7 +213,7 @@ def test_numbering_formats_are_taken_from_the_old_prefixes(migrated):
         "VALUES (1, 'ecole', 'École', 'Association', 'franchise', 20, 'EC-', 'EC-AV-', 'EC-DE-', 5, 30, now(), now())",
         "INSERT INTO number_sequence (issuer_id, kind, year, last_number) VALUES (1, 'facture', 2026, 12)",
     )
-    upgrade(MIGRATIONS)
+    upgrade(MIGRATIONS, revision="f0000004numbering")
     formats, sequences = run_sql(
         migrated,
         "SELECT invoice_format, credit_format, quote_format FROM issuer",
@@ -235,6 +235,44 @@ def test_numbering_formats_shared_by_two_issuers_are_told_apart(migrated):
         "(1, 'ecole', 'École', 'Association', 'franchise', 20, 'FA-', 'AV-', 4, 30, now(), now()), "
         "(2, 'orchestre', 'Orchestre', 'Association', 'franchise', 20, 'OR-', 'OR-AV-', 4, 30, now(), now())",
     )
-    upgrade(MIGRATIONS)
+    upgrade(MIGRATIONS, revision="f0000004numbering")
     (rows,) = run_sql(migrated, "SELECT invoice_format, quote_format FROM issuer ORDER BY id")
     assert rows == [("FA-{AAAA}-{NNNN}", "DE-{AAAA}-{NNNN}"), ("OR-{AAAA}-{NNNN}", "ORCHESTRE-DE-{AAAA}-{NNNN}")]
+
+
+def test_issuer_formats_become_a_default_series(migrated):
+    """Les formats de l'émetteur deviennent sa série « Générale » ; ses factures, avoirs et compteurs y passent."""
+    upgrade(MIGRATIONS, revision="f0000004numbering")
+    run_sql(
+        migrated,
+        *SEED,
+        "INSERT INTO issuer (id, code, name, legal_name, vat_regime, default_vat_rate, invoice_format, credit_format, "
+        "payment_terms_days, created_at, updated_at) "
+        "VALUES (1, 'ecole', 'École', 'Association', 'franchise', 20, 'F{AA}-{NNN}', 'A{AA}-{NNN}', 30, now(), now())",
+        "INSERT INTO customer (id, kind, name, created_at, updated_at) VALUES (1, 'structure', 'Mairie', now(), now())",
+        "INSERT INTO invoice (id, kind, status, issuer_id, customer_id, number, total_ht_cents, total_vat_cents, "
+        "total_ttc_cents, created_at, updated_at) VALUES "
+        "(1, 'facture', 'emise', 1, 1, 'F26-001', 1000, 0, 1000, now(), now()), "
+        "(2, 'devis', 'emise', 1, 1, 'DE-2026-0001', 1000, 0, 1000, now(), now())",
+        "INSERT INTO number_sequence (issuer_id, kind, period, last_number) VALUES "
+        "(1, 'facture', '2026', 1), (1, 'devis', '2026', 1)",
+    )
+    upgrade(MIGRATIONS)
+    series, invoices, sequences = run_sql(
+        migrated,
+        "SELECT id, code, name, invoice_format, credit_format, is_default FROM number_series",
+        "SELECT id, series_id FROM invoice ORDER BY id",
+        "SELECT kind, series_id, period, last_number FROM number_sequence ORDER BY kind",
+    )
+    ((series_id, *rest),) = series
+    assert rest == ["generale", "Générale", "F{AA}-{NNN}", "A{AA}-{NNN}", True]
+    assert invoices == [(1, series_id), (2, None)]
+    assert sequences == [("devis", 0, "2026", 1), ("facture", series_id, "2026", 1)]
+    assert_fails(
+        migrated,
+        "INSERT INTO number_series (issuer_id, code, name, invoice_format, credit_format, is_default) "
+        "VALUES (1, 'ce', 'CE', 'CE{N}', 'CEA{N}', true)",
+    )
+    downgrade(MIGRATIONS, revision="f0000004numbering")
+    (formats,) = run_sql(migrated, "SELECT invoice_format, credit_format FROM issuer")
+    assert formats == [("F{AA}-{NNN}", "A{AA}-{NNN}")]

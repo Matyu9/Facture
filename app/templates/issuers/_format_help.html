@@ -1,0 +1,9 @@
+<details class="card format-help">
+  <summary>Composer un format</summary>
+  <p class="muted small">Du texte fixe (lettres sans accent, chiffres, <code>-</code> <code>_</code> <code>.</code> <code>/</code>) et des balises entre accolades :</p>
+  <dl class="props">
+    {% for key, label in help.items() %}<dt><code>{{ key }}</code></dt><dd>{{ label }}</dd>{% endfor %}
+  </dl>
+  <p class="muted small">Le compteur repart à 1 chaque mois si le format contient l'année et le mois, chaque année s'il contient l'année, jamais sinon.
+    Exemples : <code>FA-{AAAA}-{NNNN}</code> → FA-2026-0001 · <code>F{AA}{MM}-{NNN}</code> → F2611-001 · <code>FACT-{NNNNNN}</code> → FACT-000001 · <code>{AAAA}-{L}</code> → 2026-A.</p>
+</details>

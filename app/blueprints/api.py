@@ -16,7 +16,7 @@ from werkzeug.datastructures import WWWAuthenticate
 from werkzeug.exceptions import TooManyRequests, Unauthorized
 
 from ..extensions import csrf, db
-from ..models import Customer, Invoice, Issuer
+from ..models import Customer, Invoice, Issuer, NumberSeries
 from ..services import api_tokens, archive, billing, customers, invoice_mail, money
 from ..services.activity import log
 from ..services.throttle import Limiter
@@ -73,6 +73,9 @@ def _issuer_json(issuer):
         "vat_regime": issuer.vat_regime,
         "default_vat_rate": str(issuer.default_vat_rate) if issuer.subject_to_vat else "0",
         "archived": issuer.archived,
+        "series": [
+            {"code": s.code, "name": s.name, "default": s.is_default, "archived": s.archived} for s in issuer.series
+        ],
     }
 
 
@@ -105,6 +108,7 @@ def _invoice_json(invoice):
         "state": billing.state(invoice),
         "number": invoice.number,
         "issuer": invoice.issuer.code,
+        "series": invoice.series.code if invoice.series else None,
         "customer": _customer_json(invoice),
         "valid_until": invoice.valid_until.isoformat() if invoice.valid_until else None,
         "decision": invoice.decision,
@@ -165,6 +169,8 @@ def invoices(collection):
         query = query.where(Invoice.external_id == reference)
     if code := request.args.get("emetteur"):
         query = query.join(Issuer).where(Issuer.code == code)
+    if code := request.args.get("serie"):
+        query = query.join(NumberSeries, Invoice.series_id == NumberSeries.id).where(NumberSeries.code == code)
     try:
         page = max(int(request.args.get("page", 1)), 1)
         per_page = min(max(int(request.args.get("par_page", PER_PAGE)), 1), MAX_PER_PAGE)
@@ -307,6 +313,19 @@ def _customer(token, data):
         abort(422, str(exc))
 
 
+def _series(issuer, data, kind=Invoice.INVOICE):
+    """Série demandée par son code (None : la série par défaut). 422 si elle n'existe pas ou n'a pas de sens."""
+    code = _text(data, "series", 30)
+    if code is None:
+        return None
+    if kind != Invoice.INVOICE:
+        abort(422, "« series » ne vaut que pour une facture.")
+    series = billing.find_series(issuer, code)
+    if series is None or series.archived:
+        abort(422, f"Série inconnue ou archivée pour {issuer.code} (voir GET /api/v1/emetteurs).")
+    return series
+
+
 @bp.route("/factures", methods=["POST"], defaults={"collection": "factures"})
 @bp.route("/devis", methods=["POST"], defaults={"collection": "devis"})
 def create_invoice(collection):
@@ -331,9 +350,12 @@ def create_invoice(collection):
     wants_issue = data.get("issue") is True
     if wants_issue:
         _require_issue_right()
+    series = _series(issuer, data, kind)
     customer, recipient, created = _customer(token, data)
     lines = _lines(data.get("lines"), issuer)
     invoice = billing.new_draft(issuer, customer, kind=kind, recipient=recipient)
+    if series is not None:
+        invoice.series = series
     invoice.subject = _text(data, "subject", 255)
     invoice.customer_reference = _text(data, "customer_reference", 80)
     invoice.notes = _text(data, "notes", 2000)
@@ -469,8 +491,9 @@ def quote_to_invoice(invoice_id):
     done = [i for i in quote.quote_invoices if not i.is_credit]
     if done:
         return jsonify(_invoice_json(done[0])), 200
+    series = _series(quote.issuer, data)
     try:
-        invoice = billing.invoice_from_quote(quote)
+        invoice = billing.invoice_from_quote(quote, series=series)
     except billing.BillingError as exc:
         abort(409, str(exc))
     invoice.service_date = _date(data, "service_date") or invoice.service_date or date.today()

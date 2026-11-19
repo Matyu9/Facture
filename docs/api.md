@@ -19,13 +19,15 @@ Les actions sont inscrites au journal au nom du jeton. 600 appels par minute au 
 
 ## Lire
 
-- `GET /emetteurs` : codes, noms, régime de TVA.
-- `GET /factures?client=<external_id>&source=…&reference=…&emetteur=<code>&type=facture|avoir&page=1&par_page=50` : factures et avoirs.
+- `GET /emetteurs` : codes, noms, régime de TVA, et `series` : les séries de numérotation des factures de chaque émetteur (`code`, `name`, `default`, `archived`).
+- `GET /factures?client=<external_id>&source=…&reference=…&emetteur=<code>&serie=<code>&type=facture|avoir&page=1&par_page=50` : factures et avoirs.
 - `GET /devis?…` : les devis, mêmes filtres.
 - `GET /factures/<id>`, `GET /devis/<id>` : pièce, lignes, totaux, `paid`, `balance`, `state`.
 - `GET /factures/<id>/pdf`, `GET /devis/<id>/pdf` : le PDF archivé (409 pour un brouillon).
 
 `state` d'une facture : `brouillon`, `a_payer`, `en_retard`, `partiel`, `payee`, `annulee`, `avoir`. D'un devis : `brouillon`, `en_attente`, `accepte`, `refuse`, `expire`, `facture`.
+
+Une facture ou un avoir porte `series`, le code de sa série de numérotation (`null` pour un devis).
 
 Un devis porte aussi `valid_until`, `decision` (`accepte`, `refuse` ou `null`) et `invoices` (la facture qui en est tirée) ; une facture tirée d'un devis porte `quote`.
 
@@ -65,6 +67,7 @@ Un devis porte aussi `valid_until`, `decision` (`accepte`, `refuse` ou `null`) e
   - sans `id` ni `external_id` : un **destinataire ponctuel**, imprimé sur la pièce sans créer de fiche client (`name` obligatoire ; l'adresse l'est pour émettre).
 - `idempotency_key` : la même clé renvoie la même pièce (200) sans en créer d'autre. Création : 201. Une clé déjà utilisée pour une pièce de l'autre type : 409.
 - `issue: true` (jeton qui peut émettre) émet aussitôt, à la date du jour ou à `issue_date` ; si la pièce ne peut pas l'être (adresse manquante…), rien n'est créé (422).
+- `series` (facture seulement) : le code d'une série de l'émetteur, par exemple `"ce"` pour numéroter les factures des comités d'entreprise à part. Absent : la série par défaut. Inconnue ou archivée : 422.
 - Champs facultatifs : `service_end`, `customer_reference`, `notes` ; `due_date` pour une facture, `valid_until` pour un devis (sinon : délai de validité de l'émetteur). `service_date` est obligatoire pour émettre une facture (par défaut : le jour même), facultative sur un devis.
 
 ## Agir sur une pièce (jeton qui peut émettre)
@@ -74,7 +77,7 @@ Corps JSON facultatif.
 - `POST /factures/<id>/emettre`, `POST /devis/<id>/emettre` — `{"issue_date": "2026-11-19"}` facultatif. Numéro, PDF archivé, pièce figée. Déjà émise : renvoyée telle quelle (200). Ce qui manque pour émettre : 422 avec le détail.
 - `POST /factures/<id>/envoyer`, `POST /devis/<id>/envoyer` — `{"to", "subject", "body"}` facultatifs. Envoie la pièce émise par email, PDF joint, à l'adresse du client (ou à `to`), avec le texte de l'émetteur (ou `subject` / `body`). 409 pour un brouillon, 503 si l'envoi d'emails n'est pas configuré.
 - `POST /devis/<id>/accepter`, `POST /devis/<id>/refuser` : note la réponse du client (409 si le devis est déjà facturé).
-- `POST /devis/<id>/facturer` — `{"issue": true, "issue_date", "service_date", "service_end"}` facultatifs. Crée la facture du devis (mêmes destinataire, objet et lignes ; le devis passe « accepté »), en brouillon ou émise. Rejouée, renvoie la facture déjà tirée du devis (200).
+- `POST /devis/<id>/facturer` — `{"issue": true, "issue_date", "service_date", "service_end", "series"}` facultatifs. Crée la facture du devis (mêmes destinataire, objet et lignes ; le devis passe « accepté »), en brouillon ou émise. Rejouée, renvoie la facture déjà tirée du devis (200).
 
 ## Exemple : facturer une cotisation de bout en bout
 

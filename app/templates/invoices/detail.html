@@ -88,7 +88,7 @@
   {% if invoice.is_quote %}
   <p class="muted small">Une fois émis, le devis reçoit le numéro suivant de {{ invoice.issuer.name }} et son PDF est archivé : il ne se modifie plus (pour une nouvelle proposition, dupliquez-le). Il peut ensuite être envoyé, accepté ou refusé, et transformé en facture.</p>
   {% else %}
-  <p class="muted small">Une fois émise, la pièce reçoit le numéro suivant de {{ invoice.issuer.name }}, son PDF est archivé, et elle ne peut plus être modifiée ni supprimée : une erreur se corrige par un avoir.</p>
+  <p class="muted small">Une fois émise, la pièce reçoit le numéro suivant de {{ invoice.issuer.name }}{% if invoice.series and invoice.issuer.series | length > 1 %} (série {{ invoice.series.name }}){% endif %}, son PDF est archivé, et elle ne peut plus être modifiée ni supprimée : une erreur se corrige par un avoir.</p>
   {% endif %}
   <form method="post" action="{{ url_for('invoices.issue', invoice_id=invoice.id) }}" class="inline-form" data-confirm="Émettre {{ {'avoir': 'cet avoir', 'devis': 'ce devis'}.get(invoice.kind, 'cette facture') }} de {{ invoice.total_ttc_cents | money }} ? La pièce ne pourra plus être modifiée.">
     {{ issue_form.hidden_tag() }}
@@ -103,6 +103,7 @@
   <section>
     <h2>Pièce</h2>
     <dl class="props">
+      {% if invoice.series and invoice.issuer.series | length > 1 %}<dt>Série</dt><dd>{{ invoice.series.name }}</dd>{% endif %}
       <dt>Émise le</dt><dd>{{ invoice.issue_date | date_fr if invoice.issue_date else "pas encore" }}{% if invoice.issued_by %} <span class="meta muted">par {{ invoice.issued_by.full_name }}</span>{% endif %}</dd>
       {% if invoice.is_quote %}<dt>Valable jusqu'au</dt><dd>{{ invoice.valid_until | date_fr if invoice.valid_until else ("à l'émission + " ~ invoice.issuer.quote_validity_days ~ " jours") }}</dd>
       {% if invoice.decision %}<dt>Décision</dt><dd>{{ states[invoice.decision] }} le {{ invoice.decided_at | datetime_fr }}</dd>{% endif %}

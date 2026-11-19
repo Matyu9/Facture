@@ -13,7 +13,7 @@ from wtforms import BooleanField, DateField, RadioField, SelectField, StringFiel
 from wtforms.validators import DataRequired, Length, Optional, Regexp
 
 from ..extensions import db, fold_contains
-from ..models import RECIPIENT_FIELDS, Activity, Customer, Invoice, Issuer, Payment, Product
+from ..models import RECIPIENT_FIELDS, Activity, Customer, Invoice, Issuer, NumberSeries, Payment, Product
 from ..permissions import can, require
 from ..services import archive, billing, customers, invoice_mail, money, pdf
 from ..services.activity import log
@@ -82,6 +82,10 @@ class NewForm(RecipientChoice, FlaskForm):
 
 class HeaderForm(RecipientChoice, FlaskForm):
     issuer_id = SelectField("Émetteur", coerce=int)
+    # Les séries de l'émetteur du brouillon ; s'il change d'émetteur, la facture prend la série par défaut du nouveau.
+    series_id = SelectField(
+        "Série de numérotation", coerce=lambda v: int(v) if str(v or "").isdigit() else 0, validate_choice=False
+    )
     subject = StringField("Objet", validators=[Optional(), Length(max=255)])
     service_date = DateField("Date de la prestation", validators=[Optional()])
     service_end = DateField("Jusqu'au (période)", validators=[Optional()])
@@ -96,6 +100,13 @@ class HeaderForm(RecipientChoice, FlaskForm):
         self.issuer_id.choices = [(i.id, i.name) for i in billing.issuers()]
         if invoice is not None and invoice.issuer.archived:
             self.issuer_id.choices.insert(0, (invoice.issuer.id, invoice.issuer.name + " (archivé)"))
+        self.series_id.choices = []
+        if invoice is not None:
+            self.series_id.choices = [
+                (s.id, s.name + (" (archivée)" if s.archived else ""))
+                for s in invoice.issuer.series
+                if not s.archived or s is invoice.series
+            ]
         self._customer_choices(invoice.customer if invoice is not None else None)
 
 
@@ -263,6 +274,9 @@ def _filters(kinds=Invoice.BILLING_KINDS):
     issuer = db.session.get(Issuer, args.get("emetteur", type=int) or 0)
     if issuer:
         query = query.where(Invoice.issuer_id == issuer.id)
+    series = db.session.get(NumberSeries, args.get("serie", type=int) or 0) if Invoice.QUOTE not in kinds else None
+    if series:
+        query = query.where(Invoice.series_id == series.id)
     kind = args.get("type")
     if kind not in kinds:
         kind = None
@@ -291,6 +305,7 @@ def _filters(kinds=Invoice.BILLING_KINDS):
         for k, v in {
             "q": q,
             "emetteur": issuer.id if issuer else None,
+            "serie": series.id if series else None,
             "type": kind,
             "annee": year,
             "du": since.isoformat() if since else None,
@@ -348,6 +363,7 @@ def index():
         params=params,
         summary=summary,
         issuers=billing.issuers(include_archived=True),
+        all_series=_listed_series(),
         years=years,
         states=billing.INVOICE_STATES,
         state=billing.state,
@@ -355,6 +371,18 @@ def index():
         kinds={k: Invoice.KINDS[k] for k in Invoice.BILLING_KINDS},
         edit=can(current_user, "invoice.edit"),
     )
+
+
+def _listed_series():
+    """Séries proposées dans le filtre de la liste : seulement s'il y en a plus d'une par émetteur quelque part."""
+    series = db.session.scalars(db.select(NumberSeries).order_by(NumberSeries.issuer_id, NumberSeries.name)).all()
+    by_issuer = {}
+    for s in series:
+        by_issuer.setdefault(s.issuer_id, []).append(s)
+    if all(len(group) < 2 for group in by_issuer.values()):
+        return []
+    many = len(by_issuer) > 1
+    return [(s.id, f"{s.issuer.name} · {s.name}" if many else s.name) for s in series]
 
 
 @bp.route("/export.csv")
@@ -390,6 +418,7 @@ def export():
             "Réglé",
             "Reste à payer",
             "Facture corrigée",
+            "Série",
         ]
     )
 
@@ -417,6 +446,7 @@ def export():
                     fmt(invoice.paid_cents) if first and not invoice.is_credit else "",
                     fmt(invoice.balance_cents) if first and not invoice.is_credit else "",
                     invoice.credited_invoice.number if invoice.credited_invoice else "",
+                    invoice.series.name if invoice.series else "",
                 ]
             )
     log("invoice.export", f"Export du journal des ventes ({len(items)} pièce(s))")
@@ -488,6 +518,7 @@ def edit(invoice_id):
     if request.method == "GET":
         form.recipient_mode.data = ONE_OFF if invoice.is_one_off else CLIENT
         form.customer_id.data = invoice.customer_id or 0
+        form.series_id.data = invoice.series_id or 0
     rows = _rows_of(invoice)
     errors = []
     if form.validate_on_submit():
@@ -503,6 +534,11 @@ def edit(invoice_id):
             try:
                 if issuer.id != invoice.issuer_id:
                     billing.change_issuer(invoice, issuer)
+                elif invoice.kind == Invoice.INVOICE and form.series_id.data:
+                    chosen = db.session.get(NumberSeries, form.series_id.data)
+                    if chosen is None:
+                        abort(400)
+                    billing.set_series(invoice, chosen)
                 if not invoice.is_credit:
                     if customer is not None:
                         billing.set_customer(invoice, customer)
