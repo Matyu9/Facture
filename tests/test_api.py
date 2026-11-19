@@ -175,3 +175,25 @@ def test_token_screen_shows_the_token_once(client, admin):
     raw = re.search(r"(fct_[\w-]+)", html).group(1)
     assert api_tokens.find(raw).can_issue
     assert raw not in client.get("/parametres/api").get_data(as_text=True)
+
+
+@pytest.mark.parametrize(
+    ("value", "ok"),
+    [
+        ("a@b.fr", True),
+        ("jeanne.durand@mairie.gien.fr", True),
+        ("", False),
+        (None, False),
+        ("a@b", False),
+        ("a@.fr", False),
+        ("a@b.", False),
+        ("@b.fr", False),
+        ("a b@c.fr", False),
+        ("a@b@c.fr", False),
+        ("!" * 100_000, False),
+    ],
+)
+def test_api_email_check(value, ok):
+    from app.blueprints.api import _valid_email
+
+    assert _valid_email(value) is ok

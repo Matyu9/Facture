@@ -8,7 +8,6 @@ d'idempotence (`idempotency_key`) : rejouée, elle renvoie la même pièce sans 
 (émettre, facturer un devis) sont sans effet si elles ont déjà eu lieu. Documentation : docs/api.md.
 """
 
-import re
 from datetime import date
 
 from flask import Blueprint, Response, abort, g, jsonify, request, url_for
@@ -27,8 +26,6 @@ csrf.exempt(bp)
 SOURCE = "api"
 # Collection de l'adresse (/factures, /devis) → types de pièces qu'elle sert.
 COLLECTIONS = {"factures": Invoice.BILLING_KINDS, "devis": (Invoice.QUOTE,)}
-# Domaine en morceaux séparés par des points : sans ambiguïté, donc sans retour arrière coûteux.
-EMAIL = r"[^@\s]+@[^@\s.]+(?:\.[^@\s.]+)+"
 MAX_BODY = 512 * 1024
 PER_PAGE, MAX_PER_PAGE = 50, 200
 _rate = Limiter("api", 600, 60)
@@ -432,6 +429,16 @@ def issue(collection, invoice_id):
     return jsonify(_invoice_json(invoice))
 
 
+def _valid_email(value):
+    """quelqu'un@domaine.tld : découpage simple, en temps linéaire (une expression régulière pourrait être piégée par
+    une adresse construite pour la faire ralentir)."""
+    if not value or any(c.isspace() for c in value):
+        return False
+    local, _, domain = value.partition("@")
+    labels = domain.split(".")
+    return bool(local) and "@" not in domain and len(labels) >= 2 and all(labels)
+
+
 @bp.route("/factures/<int:invoice_id>/envoyer", methods=["POST"], defaults={"collection": "factures"})
 @bp.route("/devis/<int:invoice_id>/envoyer", methods=["POST"], defaults={"collection": "devis"})
 def send(collection, invoice_id):
@@ -441,7 +448,7 @@ def send(collection, invoice_id):
     data = _body()
     invoice = _get(collection, invoice_id)
     to = _text(data, "to", 255) or invoice.recipient.get("email")
-    if not to or not re.fullmatch(EMAIL, to):
+    if not _valid_email(to):
         abort(422, "Adresse du destinataire absente ou invalide (« to », ou l'email du client).")
     subject, body = invoice_mail.default_message(invoice)
     subject = _text(data, "subject", 200) or subject
