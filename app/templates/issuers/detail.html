@@ -1,0 +1,55 @@
+{% extends "base.html" %}
+{% block title %}{{ issuer.name }}{% endblock %}
+{% block content %}
+<p><a href="{{ url_for('issuers.index') }}">← Émetteurs</a></p>
+<div class="page-head">
+  <div>
+    <h1>{{ issuer.name }}{% if issuer.archived %} <span class="badge">archivé</span>{% endif %}</h1>
+    <p class="muted">{{ issuer.regime_label }} · code <code>{{ issuer.code }}</code> · {{ count }} pièce(s)</p>
+  </div>
+  {% if manage %}
+  <div class="actions">
+    <a href="{{ url_for('issuers.edit', issuer_id=issuer.id) }}" role="button" class="secondary">Modifier</a>
+    <form method="post" action="{{ url_for('issuers.archive', issuer_id=issuer.id) }}"{% if not issuer.archived %} data-confirm="Archiver {{ issuer.name }} ? Il ne sera plus proposé pour de nouvelles factures. Ses pièces restent consultables."{% endif %}>
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <button type="submit" class="secondary outline">{{ "Rétablir" if issuer.archived else "Archiver" }}</button>
+    </form>
+  </div>
+  {% endif %}
+</div>
+<div class="detail-grid">
+  <section>
+    <h2>Sur les factures</h2>
+    <dl class="props">
+      <dt>Dénomination</dt><dd>{{ issuer.legal_name }}{% if issuer.legal_form %}<span class="meta muted">{{ issuer.legal_form }}</span>{% endif %}</dd>
+      <dt>Adresse</dt><dd>{{ issuer.address or "—" }}<br>{{ issuer.postcode or "" }} {{ issuer.city or "" }}{% if issuer.country and issuer.country | lower != "france" %}<br>{{ issuer.country }}{% endif %}</dd>
+      <dt>Contact</dt><dd>{{ [issuer.email, issuer.phone, issuer.website] | select | join(" · ") or "—" }}</dd>
+      <dt>SIRET</dt><dd>{{ issuer.siret or "—" }}</dd>
+      <dt>RNA</dt><dd>{{ issuer.rna or "—" }}</dd>
+      <dt>TVA</dt><dd>{{ issuer.regime_label }}{% if issuer.subject_to_vat %} · {{ issuer.vat_number }} · taux par défaut {{ issuer.default_vat_rate | rate }}{% endif %}{% if issuer.mention %}<span class="meta muted">« {{ issuer.mention }} »</span>{% endif %}</dd>
+    </dl>
+  </section>
+  <section>
+    <h2>Numérotation et paiement</h2>
+    <dl class="props">
+      <dt>Prochaine facture</dt><dd><code>{{ sample }}</code> (si c'est la première de l'année)</dd>
+      <dt>Avoirs</dt><dd><code>{{ issuer.credit_prefix }}AAAA-…</code></dd>
+      <dt>Délai</dt><dd>{{ issuer.payment_terms_days }} jour(s)</dd>
+      <dt>IBAN</dt><dd>{{ issuer.iban or "—" }}{% if issuer.bic %} · {{ issuer.bic }}{% endif %}</dd>
+      <dt>Modalités</dt><dd>{{ issuer.payment_instructions or "—" }}</dd>
+      <dt>Retard</dt><dd><small>{{ issuer.late_penalty or default_penalty }}</small>{% if not issuer.late_penalty %}<span class="meta muted">mention par défaut</span>{% endif %}</dd>
+    </dl>
+  </section>
+</div>
+<section class="card">
+  <h2>Mise en page des factures</h2>
+  <div class="logo-row">
+    {% if issuer.logo %}<img class="issuer-logo" src="{{ url_for('issuers.logo_file', name=issuer.logo.rsplit('/', 1)[-1]) }}" alt="Logo">{% endif %}
+    <p class="muted small">{{ layouts[issuer.pdf_layout] }} · {% if issuer.logo_size == "aucun" %}sans logo{% else %}logo {{ logo_sizes[issuer.logo_size] | lower }}, {{ logo_positions[issuer.logo_position] | lower }}{% if not issuer.logo %} (celui de l'appli){% endif %}{% endif %}{% if issuer.intro_text or issuer.closing_text %} · textes personnalisés{% endif %}</p>
+  </div>
+  <div class="actions">
+    <a href="{{ url_for('issuers.preview', issuer_id=issuer.id) }}" role="button" class="secondary outline" target="_blank" rel="noopener">Aperçu</a>
+    {% if manage %}<a href="{{ url_for('issuers.layout', issuer_id=issuer.id) }}" role="button" class="secondary">Modifier la mise en page et le logo</a>{% endif %}
+  </div>
+</section>
+{% endblock %}

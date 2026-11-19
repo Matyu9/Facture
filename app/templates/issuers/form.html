@@ -1,0 +1,38 @@
+{% extends "base.html" %}
+{% from "partials/_form.html" import field %}
+{% block title %}{{ issuer.name if issuer else "Nouvel émetteur" }}{% endblock %}
+{% block content %}
+<p><a href="{{ url_for('issuers.detail', issuer_id=issuer.id) if issuer else url_for('issuers.index') }}">← {{ issuer.name if issuer else "Émetteurs" }}</a></p>
+<h1>{{ "Modifier " ~ issuer.name if issuer else "Nouvel émetteur" }}</h1>
+{% if issuer %}<p class="muted">Les pièces déjà émises gardent les mentions et l'adresse en vigueur le jour de leur émission.</p>{% endif %}
+<form method="post" novalidate>
+  {{ form.hidden_tag() }}
+  <h2>Identité</h2>
+  <div class="grid"><div>{{ field(form.name) }}</div><div>{{ field(form.code) }}<small class="muted">{{ form.code.description }}</small></div></div>
+  <div class="grid"><div>{{ field(form.legal_name) }}</div><div>{{ field(form.legal_form) }}</div></div>
+  {{ field(form.address) }}
+  <div class="grid"><div>{{ field(form.postcode) }}</div><div>{{ field(form.city) }}</div><div>{{ field(form.country) }}</div></div>
+  <div class="grid"><div>{{ field(form.email) }}</div><div>{{ field(form.phone) }}</div><div>{{ field(form.website) }}</div></div>
+  <div class="grid"><div>{{ field(form.siret) }}</div><div>{{ field(form.rna) }}</div></div>
+
+  <h2>TVA</h2>
+  <p class="muted small">Une association est le plus souvent exonérée (activités non lucratives) ou en franchise en base. Demandez à votre trésorier ou à votre comptable en cas de doute.</p>
+  <div class="grid"><div>{{ field(form.vat_regime) }}</div><div>{{ field(form.vat_number) }}</div><div>{{ field(form.default_vat_rate) }}</div></div>
+  {{ field(form.vat_mention) }}<small class="muted">{{ form.vat_mention.description }}</small>
+
+  <h2>Numérotation et paiement</h2>
+  <p class="muted small">Numéros continus, sans trou, repris à 1 chaque année : <code>&lt;préfixe&gt;2026-0001</code>. Factures et avoirs ont chacun leur série.</p>
+  <div class="grid"><div>{{ field(form.invoice_prefix) }}</div><div>{{ field(form.credit_prefix) }}</div><div>{{ field(form.number_digits) }}</div></div>
+  <div class="grid"><div>{{ field(form.payment_terms_days) }}</div><div>{{ field(form.iban) }}</div><div>{{ field(form.bic) }}</div></div>
+  {{ field(form.payment_instructions, rows=2, placeholder="Règlement par virement, ou par chèque à l'ordre de …") }}
+  {{ field(form.late_penalty, rows=3) }}<small class="muted">{{ form.late_penalty.description }}</small>
+  {{ field(form.footer, rows=2) }}
+
+  <h2>Email d'envoi</h2>
+  <p class="muted small">Laissés vides : un texte standard. Champs remplacés à l'envoi :
+    {% for key, label in placeholders.items() %}<code>{{ key }}</code> {{ label }}{{ ", " if not loop.last else "." }}{% endfor %}</p>
+  {{ field(form.email_subject) }}
+  {{ field(form.email_body, rows=6) }}
+  <button type="submit">Enregistrer</button>
+</form>
+{% endblock %}

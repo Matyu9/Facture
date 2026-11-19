@@ -1,0 +1,37 @@
+{% extends "base.html" %}
+{% block title %}Articles{% endblock %}
+{% block content %}
+<div class="page-head">
+  <div>
+    <h1>Articles{% if archived %} archivés{% endif %}</h1>
+    <p class="muted">Prestations et produits qui reviennent souvent : choisis sur une ligne de facture, ils la remplissent. Une facture garde ses montants si l'article change ensuite.</p>
+  </div>
+  {% if edit %}<a href="{{ url_for('products.create') }}" role="button">+ Nouvel article</a>{% endif %}
+</div>
+<p class="small">{% if archived %}<a href="{{ url_for('products.index') }}">← Articles actifs</a>{% else %}<a href="{{ url_for('products.index', archives=1) }}">Articles archivés</a>{% endif %}</p>
+<div class="overflow-auto"><table class="striped responsive">
+  <thead><tr><th>Article</th><th>Unité</th><th class="num">Prix unitaire</th><th>TVA</th><th>Émetteur</th>{% if edit %}<th></th>{% endif %}</tr></thead>
+  <tbody>
+  {% for p in items %}
+  <tr>
+    <td data-label="Article"><span><strong>{{ p.label }}</strong>{% if p.description %}<br><small class="muted">{{ p.description | truncate(120) }}</small>{% endif %}</span></td>
+    <td data-label="Unité">{{ p.unit or "—" }}</td>
+    <td data-label="Prix unitaire" class="num">{{ p.unit_price_cents | money }}</td>
+    <td data-label="TVA">{{ p.vat_rate | rate if p.vat_rate is not none else "par défaut" }}</td>
+    <td data-label="Émetteur">{{ p.issuer.name if p.issuer else "Tous" }}</td>
+    {% if edit %}
+    <td data-label="" class="actions">
+      <a href="{{ url_for('products.edit', product_id=p.id) }}">Modifier</a>
+      <form method="post" action="{{ url_for('products.archive', product_id=p.id) }}">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <button type="submit" class="link-button">{{ "Rétablir" if archived else "Archiver" }}</button>
+      </form>
+    </td>
+    {% endif %}
+  </tr>
+  {% else %}
+  <tr><td colspan="6" class="muted">Aucun article.</td></tr>
+  {% endfor %}
+  </tbody>
+</table></div>
+{% endblock %}

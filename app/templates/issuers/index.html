@@ -1,0 +1,27 @@
+{% extends "base.html" %}
+{% block title %}Émetteurs{% endblock %}
+{% block content %}
+<div class="page-head">
+  <div>
+    <h1>Émetteurs</h1>
+    <p class="muted">Qui émet les factures : l'association, ou chacune de ses régies. Chaque émetteur a ses mentions légales, son régime de TVA et sa propre numérotation.</p>
+  </div>
+  {% if manage %}<a href="{{ url_for('issuers.create') }}" role="button">+ Nouvel émetteur</a>{% endif %}
+</div>
+<div class="overflow-auto"><table class="striped responsive">
+  <thead><tr><th>Émetteur</th><th>Code</th><th>TVA</th><th>Numérotation</th><th>Pièces</th></tr></thead>
+  <tbody>
+  {% for i in issuers %}
+  <tr{% if i.archived %} class="muted"{% endif %}>
+    <td data-label="Émetteur"><span><a href="{{ url_for('issuers.detail', issuer_id=i.id) }}">{{ i.name }}</a>{% if i.archived %} <span class="badge">archivé</span>{% endif %}<br><small class="muted">{{ i.legal_name }}</small></span></td>
+    <td data-label="Code"><code>{{ i.code }}</code></td>
+    <td data-label="TVA">{{ i.regime_label }}</td>
+    <td data-label="Numérotation"><code>{{ i.invoice_prefix }}AAAA-{{ "0" * (i.number_digits - 1) }}1</code></td>
+    <td data-label="Pièces">{{ counts.get(i.id, 0) }}</td>
+  </tr>
+  {% else %}
+  <tr><td colspan="5" class="muted">Aucun émetteur.{% if manage %} <a href="{{ url_for('issuers.create') }}">Créez le premier</a> : l'association elle-même, ou sa régie principale.{% endif %}</td></tr>
+  {% endfor %}
+  </tbody>
+</table></div>
+{% endblock %}

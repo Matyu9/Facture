@@ -1,0 +1,8 @@
+{% extends "base.html" %}
+{% block title %}Jeton créé{% endblock %}
+{% block content %}
+<h1>Jeton créé pour « {{ token.name }} »</h1>
+<p class="flash flash-warning">Copiez-le maintenant dans la configuration de l'appli : il ne sera plus jamais affiché. Ne le partagez pas : il permet de créer des factures{{ " et de les émettre" if token.can_issue }}.</p>
+<pre class="token"><code>{{ raw }}</code></pre>
+<p><a href="{{ url_for('api_tokens.index') }}" role="button" class="secondary">J'ai copié le jeton</a></p>
+{% endblock %}

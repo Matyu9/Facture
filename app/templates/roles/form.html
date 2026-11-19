@@ -1,0 +1,36 @@
+{% extends "base.html" %}
+{% from "partials/_form.html" import field %}
+{% block title %}{{ "Rôle « " ~ role.name ~ " »" if role else "Nouveau rôle" }}{% endblock %}
+{% block content %}
+<p><a href="{{ url_for('roles.index') }}">← Rôles</a></p>
+<h1>{{ role.name if role else "Nouveau rôle" }}</h1>
+<form method="post" novalidate>
+  {{ form.hidden_tag() }}
+  <div class="grid"><div>{{ field(form.name) }}</div><div>{{ field(form.description) }}</div></div>
+
+  <h2>Droits</h2>
+  {% if role and role.key == "admin" %}
+  <p class="muted">L'administrateur a toujours tous les droits, y compris la gestion des rôles : on ne peut pas les lui retirer.</p>
+  {% endif %}
+  <div class="mapping-grid perm-grid">
+  {% for group, perms in groups %}
+    <fieldset>
+      <legend><strong>{{ group }}</strong></legend>
+      {% for key, label in perms %}
+      <label><input type="checkbox" name="permissions" value="{{ key }}" {{ "checked" if key in checked }}
+                    {{ "disabled" if role and role.key == "admin" }}> {{ label }}</label>
+      {% endfor %}
+    </fieldset>
+  {% endfor %}
+  </div>
+
+  <h2>Connexion par le fournisseur d'identité</h2>
+  {% if oidc_enabled %}
+  <p class="muted">À chaque connexion par le fournisseur, un compte membre de l'un de ces groupes reçoit ce rôle. Un rôle choisi à la main sur la fiche d'un compte n'est plus modifié par les groupes.</p>
+  {% else %}
+  <p class="muted">La connexion OIDC n'est pas configurée (variables OIDC_* du fichier .env) : ce réglage servira quand elle le sera.</p>
+  {% endif %}
+  {{ field(form.oidc_groups) }}
+  <button type="submit">Enregistrer</button>
+</form>
+{% endblock %}

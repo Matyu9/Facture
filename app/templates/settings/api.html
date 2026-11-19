@@ -1,0 +1,39 @@
+{% extends "base.html" %}
+{% from "partials/_form.html" import field %}
+{% from "settings/_tabs.html" import tabs with context %}
+{% block title %}API{% endblock %}
+{% block content %}
+<h1>Paramètres</h1>
+{{ tabs("api") }}
+<p class="muted">Un jeton permet à une autre appli de l'association (Adhérents, à terme) de créer et de lire des factures, sans compte de connexion. Ses actions sont inscrites au journal à son nom. Voir <code>docs/api.md</code>.</p>
+<div class="overflow-auto"><table class="striped responsive">
+  <thead><tr><th>Appli</th><th>Jeton</th><th>Droits</th><th>Créé le</th><th>Dernier appel</th><th></th></tr></thead>
+  <tbody>
+  {% for t in tokens %}
+  <tr{% if not t.active %} class="muted"{% endif %}>
+    <td data-label="Appli">{{ t.name }}{% if not t.active %} <span class="badge">révoqué</span>{% endif %}</td>
+    <td data-label="Jeton"><code>{{ t.prefix }}…</code></td>
+    <td data-label="Droits">{{ "Émet les factures" if t.can_issue else "Brouillons seulement" }}</td>
+    <td data-label="Créé le"><small>{{ t.created_at | date_fr }}{% if t.created_by %} par {{ t.created_by.full_name }}{% endif %}</small></td>
+    <td data-label="Dernier appel"><small>{{ t.last_used_at | datetime_fr if t.last_used_at else "jamais" }}</small></td>
+    <td data-label="" class="actions">{% if t.active %}
+      <form method="post" action="{{ url_for('api_tokens.revoke', token_id=t.id) }}" data-confirm="Révoquer le jeton de {{ t.name }} ? L'appli ne pourra plus créer de factures.">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <button type="submit" class="link-button">Révoquer</button>
+      </form>{% endif %}</td>
+  </tr>
+  {% else %}
+  <tr><td colspan="6" class="muted">Aucun jeton.</td></tr>
+  {% endfor %}
+  </tbody>
+</table></div>
+<section class="card">
+  <h2>Nouveau jeton</h2>
+  <form method="post" novalidate>
+    {{ form.hidden_tag() }}
+    {{ field(form.name) }}<small class="muted">{{ form.name.description }}</small>
+    <label>{{ form.can_issue() }} {{ form.can_issue.label.text }}</label>
+    <button type="submit">Créer le jeton</button>
+  </form>
+</section>
+{% endblock %}

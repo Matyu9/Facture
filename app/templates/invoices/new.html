@@ -1,0 +1,14 @@
+{% extends "base.html" %}
+{% from "partials/_form.html" import field %}
+{% from "invoices/_recipient.html" import recipient_block %}
+{% block title %}Nouvelle facture{% endblock %}
+{% block content %}
+<p><a href="{{ url_for('invoices.index') }}">← Factures</a></p>
+<h1>Nouvelle facture</h1>
+<form method="post" novalidate>
+  {{ form.hidden_tag() }}
+  {{ field(form.issuer_id) }}
+  {{ recipient_block(form, dest) }}
+  <button type="submit">Préparer le brouillon</button>
+</form>
+{% endblock %}

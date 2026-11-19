@@ -1,0 +1,22 @@
+{% extends "base.html" %}
+{% from "partials/_form.html" import field %}
+{% block title %}{{ product.label if product else "Nouvel article" }}{% endblock %}
+{% block content %}
+<p><a href="{{ url_for('products.index') }}">← Articles</a></p>
+<h1>{{ "Modifier " ~ product.label if product else "Nouvel article" }}</h1>
+<form method="post" novalidate>
+  {{ form.hidden_tag() }}
+  {{ field(form.label) }}
+  {{ field(form.description, rows=3) }}
+  <div class="grid"><div>{{ field(form.unit_price, inputmode="decimal") }}</div><div>{{ field(form.unit) }}<small class="muted">{{ form.unit.description }}</small></div></div>
+  <div class="grid"><div>{{ field(form.vat_rate, inputmode="decimal") }}<small class="muted">{{ form.vat_rate.description }}</small></div><div>{{ field(form.issuer_id) }}</div></div>
+  <button type="submit">Enregistrer</button>
+</form>
+{% if product %}
+<form method="post" action="{{ url_for('products.archive', product_id=product.id) }}" data-confirm="Supprimer cet article ? (Un article déjà utilisé sur une facture est archivé à la place.)">
+  <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+  <input type="hidden" name="delete" value="1">
+  <button type="submit" class="link-button">Supprimer l'article</button>
+</form>
+{% endif %}
+{% endblock %}

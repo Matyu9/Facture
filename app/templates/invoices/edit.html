@@ -1,0 +1,57 @@
+{% extends "base.html" %}
+{% from "partials/_form.html" import field %}
+{% from "invoices/_line.html" import line with context %}
+{% from "invoices/_recipient.html" import recipient_block %}
+{% block title %}{{ invoice.kind_label }} en brouillon{% endblock %}
+{% block content %}
+<p><a href="{{ url_for('invoices.detail', invoice_id=invoice.id) }}">← {{ invoice.kind_label }} en brouillon</a></p>
+<h1>{{ "Avoir" if invoice.is_credit else "Facture" }} en brouillon</h1>
+{% if invoice.is_credit and invoice.credited_invoice %}
+<p class="flash flash-info">Avoir sur la facture <a href="{{ url_for('invoices.detail', invoice_id=invoice.credited_invoice.id) }}">{{ invoice.credited_invoice.number }}</a> ({{ invoice.credited_invoice.total_ttc_cents | money }}). Pour un avoir partiel, réduisez les quantités ou les prix, ou retirez des lignes.</p>
+{% endif %}
+{% if errors %}
+<div class="flash flash-error" role="alert"><ul>{% for e in errors %}<li>{{ e }}</li>{% endfor %}</ul></div>
+{% endif %}
+<form method="post" novalidate class="invoice-form">
+  {{ form.hidden_tag() }}
+  {{ field(form.issuer_id, disabled=invoice.is_credit) }}{% if invoice.is_credit %}<input type="hidden" name="issuer_id" value="{{ invoice.issuer_id }}">{% endif %}
+  {% if invoice.is_credit %}
+  <input type="hidden" name="recipient_mode" value="{{ 'ponctuel' if invoice.is_one_off else 'client' }}">
+  <input type="hidden" name="customer_id" value="{{ invoice.customer_id or 0 }}">
+  <p><span class="muted">Client :</span> {{ invoice.recipient_name }} <small class="muted">(celui de la facture corrigée)</small></p>
+  {% else %}
+  {{ recipient_block(form, dest) }}
+  {% endif %}
+  {{ field(form.subject, placeholder="Concert du 14 juillet, animation, location…") }}
+  <div class="grid">
+    <div>{{ field(form.service_date) }}</div>
+    <div>{{ field(form.service_end) }}</div>
+    {% if not invoice.is_credit %}<div>{{ field(form.due_date) }}<small class="muted">Vide : {{ invoice.issuer.payment_terms_days }} jours après l'émission.</small></div>{% endif %}
+  </div>
+  {{ field(form.customer_reference, placeholder="Bon de commande, engagement…") }}
+
+  <h2>Lignes</h2>
+  {% if not subject_to_vat %}<p class="muted small">{{ invoice.issuer.regime_label }} : les prix sont nets, sans TVA. « {{ invoice.issuer.mention }} »</p>{% endif %}
+  <div class="lines-block">
+    <div class="overflow-auto"><table class="lines responsive">
+      <thead><tr><th>Désignation</th><th class="num">Qté</th><th>Unité</th><th class="num">Prix unitaire{{ " HT" if subject_to_vat }}</th>{% if subject_to_vat %}<th class="num">TVA %</th>{% endif %}<th></th></tr></thead>
+      <tbody data-rows>
+        {% for r in rows %}{{ line(r, loop.index, products, subject_to_vat, default_rate) }}{% endfor %}
+        {% for _ in range(3 if not rows else 1) %}{{ line({}, rows | length + loop.index, products, subject_to_vat, default_rate) }}{% endfor %}
+      </tbody>
+    </table></div>
+    <template data-row-template>{{ line({}, "__label__", products, subject_to_vat, default_rate) }}</template>
+    <button type="button" class="secondary outline small" data-add-row hidden>+ Ajouter une ligne</button>
+  </div>
+  <p class="muted small">Une ligne sans désignation ni prix est ignorée. Un prix négatif fait une remise.</p>
+  <p class="totals-preview"><span class="muted">Total enregistré :</span> <strong>{{ invoice.total_ttc_cents | money }}</strong>{% if subject_to_vat %} <small class="muted">dont TVA {{ invoice.total_vat_cents | money }}</small>{% endif %}</p>
+
+  {{ field(form.notes, rows=2, placeholder="Imprimé sur la pièce") }}
+  {{ field(form.internal_note, rows=2, placeholder="Pour l'équipe seulement") }}
+  <div class="actions">
+    <button type="submit">Enregistrer</button>
+    <button type="submit" name="then" value="rester" class="secondary">Enregistrer et continuer</button>
+    {% if can(current_user, "invoice.issue") %}<button type="submit" name="then" value="emettre" class="secondary outline">Enregistrer puis émettre…</button>{% endif %}
+  </div>
+</form>
+{% endblock %}

@@ -1,0 +1,25 @@
+{#- Une ligne de facture modifiable. `r` : ses valeurs (textes), `n` : son rang. -#}
+{% macro line(r, n, products, subject_to_vat, default_rate) -%}
+<tr data-line>
+  <td data-label="Désignation">
+    {% if products %}
+    <select name="product_id" data-product aria-label="Article de la ligne {{ n }}">
+      <option value="">Article…</option>
+      {% for p in products %}
+      <option value="{{ p.id }}" data-label="{{ p.label }}" data-description="{{ p.description or '' }}" data-unit="{{ p.unit or '' }}"
+              data-price="{{ money.amount_input(p.unit_price_cents) }}" data-vat="{{ money.number(default_vat_rate(p.issuer or invoice.issuer, p)) }}"
+              {{ "selected" if r.product_id == p.id | string }}>{{ p.label }} · {{ p.unit_price_cents | money }}</option>
+      {% endfor %}
+    </select>
+    {% else %}<input type="hidden" name="product_id" value="">{% endif %}
+    <input type="text" name="label" value="{{ r.label }}" placeholder="Désignation" aria-label="Désignation de la ligne {{ n }}" maxlength="200">
+    <textarea name="description" rows="1" placeholder="Précisions (facultatif)" aria-label="Précisions de la ligne {{ n }}">{{ r.description }}</textarea>
+  </td>
+  <td data-label="Quantité"><input type="text" name="quantity" value="{{ r.quantity or '1' }}" inputmode="decimal" aria-label="Quantité de la ligne {{ n }}" class="num"></td>
+  <td data-label="Unité"><input type="text" name="unit" value="{{ r.unit }}" placeholder="forfait" aria-label="Unité de la ligne {{ n }}" maxlength="30"></td>
+  <td data-label="Prix unitaire"><input type="text" name="unit_price" value="{{ r.unit_price }}" inputmode="decimal" placeholder="0,00" aria-label="Prix unitaire de la ligne {{ n }}" class="num"></td>
+  {% if subject_to_vat %}<td data-label="TVA %"><input type="text" name="vat_rate" value="{{ r.vat_rate or default_rate }}" inputmode="decimal" aria-label="Taux de TVA de la ligne {{ n }}" class="num"></td>
+  {% else %}<input type="hidden" name="vat_rate" value="0">{% endif %}
+  <td data-label=""><button type="button" class="link-button" data-remove-row hidden aria-label="Retirer la ligne {{ n }}">×</button></td>
+</tr>
+{%- endmacro %}

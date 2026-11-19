@@ -1,0 +1,75 @@
+{% extends "base.html" %}
+{% from "partials/_icons.html" import icon %}
+{% block title %}Accueil{% endblock %}
+{% block content %}
+<div class="hello">
+  <h1>Bonjour {{ current_user.first_name }}</h1>
+  <p>Facturation de {{ asso_name }}.</p>
+</div>
+{% if can(current_user, "invoice.view") %}
+{% if no_issuer %}
+<div class="flash flash-info" role="status">
+  <span>Pour commencer, déclarez qui émet les factures : l'association, ou chacune de ses régies, avec ses mentions légales et sa TVA.
+  {% if can(current_user, "issuer.manage") %}<a href="{{ url_for('issuers.create') }}">Créer un émetteur</a>{% else %}Un administrateur doit le faire.{% endif %}</span>
+</div>
+{% endif %}
+{% if can(current_user, "invoice.edit") and not no_issuer %}
+<p class="actions"><a href="{{ url_for('invoices.create') }}" role="button">{{ icon("plus", 18) }} Nouvelle facture</a>
+  <a href="{{ url_for('customers.create', facturer=1) }}" role="button" class="secondary outline">Nouveau client</a></p>
+{% endif %}
+
+<h2>Année {{ year }}</h2>
+{% if summary %}
+<div class="overflow-auto"><table class="striped responsive numbers">
+  <thead><tr><th>Émetteur</th><th>Factures</th><th>Facturé</th><th>Avoirs</th><th>Encaissé</th><th>Reste dû</th></tr></thead>
+  <tbody>
+  {% for r in summary %}
+  <tr>
+    <td data-label="Émetteur"><a href="{{ url_for('invoices.index', emetteur=r.issuer.id, annee=year) }}">{{ r.issuer.name }}</a></td>
+    <td data-label="Factures">{{ r.count }}</td>
+    <td data-label="Facturé">{{ r.invoiced | money }}</td>
+    <td data-label="Avoirs">{{ r.credited | money if r.credited else "—" }}</td>
+    <td data-label="Encaissé">{{ r.paid | money }}</td>
+    <td data-label="Reste dû"><strong>{{ r.due | money }}</strong></td>
+  </tr>
+  {% endfor %}
+  </tbody>
+</table></div>
+{% else %}<p class="empty">Aucune pièce émise cette année.</p>{% endif %}
+
+<div class="detail-grid">
+  <section class="card">
+    <h2>{{ icon("alert", 18) }} En retard <span class="count">{{ overdue | length }}</span></h2>
+    {% if overdue %}
+    <ul class="plain-list">
+      {% for i in overdue %}
+      <li><a href="{{ url_for('invoices.detail', invoice_id=i.id) }}">{{ i.number }}</a> · {{ i.recipient_name }}
+        <br><small class="muted">échue le {{ i.due_date | date_fr }} · reste {{ i.balance_cents | money }}</small></li>
+      {% endfor %}
+    </ul>
+    <p class="small"><a href="{{ url_for('invoices.index', etat='en_retard') }}">Toutes les factures en retard</a></p>
+    {% else %}<p class="empty">Aucune facture en retard.</p>{% endif %}
+  </section>
+  <section class="card">
+    <h2>{{ icon("file", 18) }} Brouillons <span class="count">{{ drafts | length }}</span></h2>
+    {% if drafts %}
+    <ul class="plain-list">
+      {% for i in drafts %}
+      <li><a href="{{ url_for('invoices.detail', invoice_id=i.id) }}">{{ i.kind_label }} · {{ i.recipient_name }}</a>
+        <br><small class="muted">{{ i.total_ttc_cents | money }} · {{ i.issuer.name }}{% if i.source %} · créé par l'API{% endif %}</small></li>
+      {% endfor %}
+    </ul>
+    {% else %}<p class="empty">Aucun brouillon en attente.</p>{% endif %}
+  </section>
+</div>
+{% endif %}
+{% if notifications %}
+<section class="card">
+  <h2>{{ icon("bell", 18) }} Nouveautés</h2>
+  <ul class="plain-list">
+    {% for n in notifications %}<li><small class="muted">{{ n.created_at | datetime_fr }}</small><br>{% if n.link %}<a href="{{ n.link }}">{{ n.message }}</a>{% else %}{{ n.message }}{% endif %}</li>{% endfor %}
+  </ul>
+  <p class="small"><a href="{{ url_for('notifications.index') }}">Toutes les notifications</a></p>
+</section>
+{% endif %}
+{% endblock %}

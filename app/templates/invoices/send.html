@@ -1,0 +1,15 @@
+{% extends "base.html" %}
+{% from "partials/_form.html" import field %}
+{% block title %}Envoyer {{ invoice.number }}{% endblock %}
+{% block content %}
+<p><a href="{{ url_for('invoices.detail', invoice_id=invoice.id) }}">← {{ invoice.kind_label }} {{ invoice.number }}</a></p>
+<h1>{{ "Relancer" if reminder else "Envoyer" }} {{ invoice.kind_label | lower }} {{ invoice.number }}</h1>
+<p class="muted">Le PDF archivé part en pièce jointe. Les réponses arrivent à {{ (invoice.issuer_snapshot or {}).get("email") or "l'adresse d'envoi de l'appli" }}.</p>
+<form method="post" novalidate>
+  {{ form.hidden_tag() }}
+  {{ field(form.to, autocomplete="off") }}
+  {{ field(form.subject) }}
+  {{ field(form.body, rows=10) }}
+  <button type="submit">Envoyer</button>
+</form>
+{% endblock %}

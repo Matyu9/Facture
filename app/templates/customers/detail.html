@@ -1,0 +1,69 @@
+{% extends "base.html" %}
+{% block title %}{{ customer.name }}{% endblock %}
+{% block content %}
+<p><a href="{{ url_for('customers.index') }}">← Clients</a></p>
+<div class="page-head">
+  <div>
+    <h1>{{ customer.name }}{% if customer.archived %} <span class="badge">archivé</span>{% endif %}</h1>
+    <p class="muted">{{ customer.kind_label }}{% if customer.source %} · venu de « {{ customer.source }} » (réf. {{ customer.external_id }}){% endif %}</p>
+  </div>
+  {% if edit %}
+  <div class="actions">
+    {% if not customer.archived %}<a href="{{ url_for('invoices.create', client=customer.id) }}" role="button">+ Facture</a>{% endif %}
+    <a href="{{ url_for('customers.edit', customer_id=customer.id) }}" role="button" class="secondary">Modifier</a>
+    <form method="post" action="{{ url_for('customers.archive', customer_id=customer.id) }}">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <button type="submit" class="secondary outline">{{ "Rétablir" if customer.archived else "Archiver" }}</button>
+    </form>
+    {% if not invoices %}
+    <form method="post" action="{{ url_for('customers.delete', customer_id=customer.id) }}" data-confirm="Supprimer {{ customer.name }} ?">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <button type="submit" class="contrast outline">Supprimer</button>
+    </form>
+    {% endif %}
+  </div>
+  {% endif %}
+</div>
+<div class="detail-grid">
+  <section>
+    <h2>Coordonnées</h2>
+    <dl class="props">
+      {% if customer.contact_name %}<dt>À l'attention de</dt><dd>{{ customer.contact_name }}</dd>{% endif %}
+      <dt>Adresse</dt><dd>{% if customer.address %}{{ customer.address }}{% if customer.address_extra %}<br>{{ customer.address_extra }}{% endif %}<br>{{ customer.postcode or "" }} {{ customer.city or "" }}{% if customer.country and customer.country | lower != "france" %}<br>{{ customer.country }}{% endif %}{% else %}<span class="badge">à compléter</span>{% endif %}</dd>
+      <dt>Email</dt><dd>{{ customer.email or "—" }}</dd>
+      <dt>Téléphone</dt><dd>{{ customer.phone or "—" }}</dd>
+      {% if customer.siret %}<dt>SIRET</dt><dd>{{ customer.siret }}</dd>{% endif %}
+      {% if customer.vat_number %}<dt>TVA</dt><dd>{{ customer.vat_number }}</dd>{% endif %}
+      {% if customer.notes %}<dt>Notes</dt><dd>{{ customer.notes }}</dd>{% endif %}
+    </dl>
+  </section>
+  <section>
+    <h2>Solde</h2>
+    <p class="stat-value">{{ balance | money }}</p>
+    <p class="muted small">Reste à payer sur ses factures émises, avoirs déduits.</p>
+  </section>
+</div>
+<h2>Pièces</h2>
+<div class="overflow-auto"><table class="striped responsive">
+  <thead><tr><th>Pièce</th><th>Date</th><th>Objet</th><th class="num">Total</th><th>État</th></tr></thead>
+  <tbody>
+  {% for i in invoices %}{% set st = state(i) %}
+  <tr>
+    <td data-label="Pièce"><a href="{{ url_for('invoices.detail', invoice_id=i.id) }}">{{ i.kind_label }} {{ i.number or "(brouillon)" }}</a></td>
+    <td data-label="Date">{{ i.issue_date | date_fr if i.issue_date else "—" }}</td>
+    <td data-label="Objet">{{ i.subject or "—" }}</td>
+    <td data-label="Total" class="num">{{ (-i.total_ttc_cents if i.is_credit else i.total_ttc_cents) | money }}</td>
+    <td data-label="État"><span class="badge {{ tones.get(st, '') }}">{{ states[st] }}</span></td>
+  </tr>
+  {% else %}
+  <tr><td colspan="5" class="muted">Aucune pièce pour ce client.</td></tr>
+  {% endfor %}
+  </tbody>
+</table></div>
+{% if history %}
+<h2>Historique</h2>
+<ul class="plain-list small">
+  {% for a in history %}<li><span class="muted">{{ a.created_at | datetime_fr }}</span> · {{ a.message }}{% if a.account %} <span class="muted">({{ a.account.full_name }})</span>{% elif a.api_token %} <span class="muted">(API {{ a.api_token.name }})</span>{% endif %}</li>{% endfor %}
+</ul>
+{% endif %}
+{% endblock %}

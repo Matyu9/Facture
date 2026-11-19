@@ -1,0 +1,59 @@
+{% extends "base.html" %}
+{% from "partials/_form.html" import field %}
+{% block title %}Mise en page · {{ issuer.name }}{% endblock %}
+{% block content %}
+<p><a href="{{ url_for('issuers.detail', issuer_id=issuer.id) }}">← {{ issuer.name }}</a></p>
+<div class="page-head">
+  <div>
+    <h1>Mise en page des factures</h1>
+    <p class="muted">{{ issuer.name }} · les pièces déjà émises gardent l'apparence qu'elles avaient. Les mentions obligatoires sont toujours imprimées.</p>
+  </div>
+  <div class="actions"><a href="{{ url_for('issuers.preview', issuer_id=issuer.id) }}" role="button" class="secondary outline" target="_blank" rel="noopener">Aperçu enregistré</a></div>
+</div>
+
+<section class="card">
+  <h2>Logo</h2>
+  <p class="muted small">PNG, JPEG ou WebP ; un fond transparent rend mieux, surtout en bandeau. Sans logo propre, celui de l'appli (Paramètres → Apparence) est utilisé.</p>
+  <div class="logo-row">
+    {% if issuer.logo %}<img class="issuer-logo" src="{{ url_for('issuers.logo_file', name=issuer.logo.rsplit('/', 1)[-1]) }}" alt="Logo actuel">{% endif %}
+    <form method="post" action="{{ url_for('issuers.set_logo', issuer_id=issuer.id) }}" enctype="multipart/form-data" class="logo-form actions">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <input type="file" name="logo" accept="image/png,image/jpeg,image/webp" aria-label="Logo de l'émetteur">
+      <button type="submit" class="secondary small">{{ "Changer" if issuer.logo else "Ajouter" }}</button>
+      {% if issuer.logo %}<button type="submit" name="remove" value="1" class="link-button">Retirer</button>{% endif %}
+    </form>
+  </div>
+</section>
+
+<form method="post" novalidate>
+  {{ form.hidden_tag() }}
+  <fieldset class="choices">
+    <legend>{{ form.pdf_layout.label.text }}</legend>
+    {% for option in form.pdf_layout %}
+    <label class="choice">{{ option() }}{{ option.label.text }}</label>
+    {% endfor %}
+  </fieldset>
+
+  <div class="grid">
+    <div>
+      <label for="pdf_color">{{ form.pdf_color.label.text }}</label>
+      {{ form.pdf_color(class_="color-input", **({"aria-invalid": "true"} if form.pdf_color.errors else {})) }}
+      {% if form.pdf_color.errors %}<small class="error">{{ form.pdf_color.errors | join(" ") }}</small>{% endif %}
+      <label class="checkbox">{{ form.app_color() }} {{ form.app_color.label.text }}</label>
+      <small class="muted">Ignorée par la disposition « Sobre ».</small>
+    </div>
+    <div>{{ field(form.logo_size) }}</div>
+    <div>{{ field(form.logo_position) }}</div>
+  </div>
+
+  <h2>Textes</h2>
+  <div class="grid"><div>{{ field(form.recipient_label) }}</div><div>{{ field(form.designation_label) }}</div></div>
+  {{ field(form.intro_text, rows=2) }}<small class="muted">{{ form.intro_text.description }}</small>
+  {{ field(form.closing_text, rows=2) }}<small class="muted">{{ form.closing_text.description }}</small>
+
+  <div class="actions">
+    <button type="submit">Enregistrer</button>
+    <button type="submit" formaction="{{ url_for('issuers.preview', issuer_id=issuer.id) }}" formtarget="_blank" class="secondary">Aperçu avant d'enregistrer</button>
+  </div>
+</form>
+{% endblock %}

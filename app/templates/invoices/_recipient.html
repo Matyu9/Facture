@@ -1,0 +1,24 @@
+{% from "partials/_form.html" import field %}
+{# Destinataire : un client enregistré, ou des coordonnées saisies sur la pièce (sans JavaScript, tout reste affiché). #}
+{% macro recipient_block(form, dest) %}
+<fieldset class="recipient-mode">
+  <legend>{{ form.recipient_mode.label.text }}</legend>
+  {% for option in form.recipient_mode %}
+  <label>{{ option() }} {{ option.label.text }}</label>
+  {% endfor %}
+</fieldset>
+<div data-show-when="recipient_mode" data-show-value="client">
+  {{ field(form.customer_id) }}
+  <p class="small muted">Le client n'existe pas encore ? Choisissez « Un autre destinataire » et cochez « L'enregistrer aussi dans les clients ».</p>
+</div>
+<div data-show-when="recipient_mode" data-show-value="ponctuel" class="recipient-fields">
+  <div class="grid"><div>{{ field(dest.kind) }}</div><div>{{ field(dest.name) }}</div></div>
+  <div class="grid"><div>{{ field(dest.contact_name) }}</div><div>{{ field(dest.email) }}</div></div>
+  {{ field(dest.address) }}
+  {{ field(dest.address_extra) }}
+  <div class="grid"><div>{{ field(dest.postcode) }}</div><div>{{ field(dest.city) }}</div><div>{{ field(dest.country) }}</div></div>
+  <div class="grid"><div>{{ field(dest.siret) }}</div><div>{{ field(dest.vat_number) }}</div></div>
+  <label class="checkbox">{{ form.save_customer() }} {{ form.save_customer.label.text }}</label>
+  <small class="muted">Sans cette case, les coordonnées restent sur la facture seulement. L'adresse est obligatoire pour émettre.</small>
+</div>
+{% endmacro %}

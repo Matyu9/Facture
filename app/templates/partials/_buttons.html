@@ -1,0 +1,7 @@
+{#- Bouton qui envoie un formulaire POST (avec son jeton CSRF), et demande confirmation si `confirm` est donné. -#}
+{% macro post_button(action, label, cls="link-button", confirm=none) -%}
+<form method="post" action="{{ action }}" class="button-form"{% if confirm %} data-confirm="{{ confirm }}"{% endif %}>
+  <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+  <button type="submit" class="{{ cls }}">{{ label }}</button>
+</form>
+{%- endmacro %}

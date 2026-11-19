@@ -1,0 +1,42 @@
+{% extends "base.html" %}
+{% block title %}Clients{% endblock %}
+{% block content %}
+<div class="page-head">
+  <div>
+    <h1>Clients{% if archived %} archivés{% endif %}</h1>
+    <p class="muted">{{ total }} client{{ "s" if total > 1 }}. Structures (mairies, comités, entreprises) et particuliers.</p>
+  </div>
+  {% if edit %}<a href="{{ url_for('customers.create') }}" role="button">+ Nouveau client</a>{% endif %}
+</div>
+<form method="get" class="filters">
+  <input type="search" name="q" value="{{ q }}" placeholder="Nom, contact, email ou ville" aria-label="Recherche">
+  <select name="archives" aria-label="Archivés" data-autosubmit>
+    <option value="">Clients actifs</option>
+    <option value="1" {{ "selected" if archived }}>Clients archivés</option>
+  </select>
+  <noscript><button type="submit">Filtrer</button></noscript>
+</form>
+<div class="overflow-auto"><table class="striped responsive">
+  <thead><tr><th>Client</th><th>Type</th><th>Ville</th><th>Email</th><th class="num">Reste dû</th></tr></thead>
+  <tbody>
+  {% for c in items %}
+  <tr>
+    <td data-label="Client"><span><a href="{{ url_for('customers.detail', customer_id=c.id) }}">{{ c.name }}</a>{% if c.source %} <span class="badge">{{ c.source }}</span>{% endif %}</span></td>
+    <td data-label="Type">{{ c.kind_label }}</td>
+    <td data-label="Ville">{{ c.city or "—" }}</td>
+    <td data-label="Email"><small>{{ c.email or "—" }}</small></td>
+    <td data-label="Reste dû" class="num">{% set due = balances.get(c.id, 0) %}{{ due | money if due else "—" }}</td>
+  </tr>
+  {% else %}
+  <tr><td colspan="5" class="muted">Aucun client ne correspond.</td></tr>
+  {% endfor %}
+  </tbody>
+</table></div>
+{% if pages > 1 %}
+<div class="actions">
+  {% if page > 1 %}<a href="{{ url_for('customers.index', page=page - 1, q=q or None, archives='1' if archived else None) }}">← Précédents</a>{% endif %}
+  <span class="muted small">Page {{ page }} sur {{ pages }}</span>
+  {% if page < pages %}<a href="{{ url_for('customers.index', page=page + 1, q=q or None, archives='1' if archived else None) }}">Suivants →</a>{% endif %}
+</div>
+{% endif %}
+{% endblock %}

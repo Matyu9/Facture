@@ -1,0 +1,161 @@
+{% extends "base.html" %}
+{% from "partials/_form.html" import field %}
+{% from "partials/_icons.html" import icon %}
+{% block title %}{{ invoice.kind_label }} {{ invoice.number or "en brouillon" }}{% endblock %}
+{% block content %}
+<p><a href="{{ url_for('invoices.index') }}">← Factures</a></p>
+<div class="page-head">
+  <div>
+    <h1>{{ invoice.kind_label }} {{ invoice.number or "en brouillon" }} <span class="badge {{ tones.get(state, '') }}">{{ states[state] }}</span></h1>
+    <p class="muted">{{ invoice.issuer.name }} → {% if invoice.customer %}<a href="{{ url_for('customers.detail', customer_id=invoice.customer_id) }}">{{ invoice.recipient_name }}</a>{% else %}{{ invoice.recipient_name }} <span class="badge">destinataire ponctuel</span>{% endif %}
+      {% if invoice.source %} · créé par l'API ({{ invoice.source }}{% if invoice.external_id %}, réf. {{ invoice.external_id }}{% endif %}){% endif %}</p>
+  </div>
+  <div class="actions">
+    {% if invoice.is_one_off and can(current_user, "invoice.edit") %}
+    <form method="post" action="{{ url_for('invoices.save_customer', invoice_id=invoice.id) }}" data-confirm="Créer la fiche client de {{ invoice.recipient_name }} avec les coordonnées de cette pièce ?">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <button type="submit" class="secondary outline">Enregistrer comme client</button>
+    </form>
+    {% endif %}
+    <a href="{{ url_for('invoices.pdf_file', invoice_id=invoice.id) }}" role="button" class="secondary" target="_blank" rel="noopener">{{ icon("file", 18) }} {{ "Aperçu PDF" if invoice.is_draft else "PDF" }}</a>
+    {% if invoice.is_draft %}
+      {% if can(current_user, "invoice.edit") %}
+      <a href="{{ url_for('invoices.edit', invoice_id=invoice.id) }}" role="button">Modifier</a>
+      <form method="post" action="{{ url_for('invoices.delete', invoice_id=invoice.id) }}" data-confirm="Supprimer ce brouillon ?">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <button type="submit" class="contrast outline">Supprimer</button>
+      </form>
+      {% endif %}
+    {% else %}
+      {% if can(current_user, "invoice.issue") %}
+      <a href="{{ url_for('invoices.send', invoice_id=invoice.id) }}" role="button" class="secondary">Envoyer</a>
+      {% if invoice.balance_cents > 0 and invoice.sent_at %}<a href="{{ url_for('invoices.send', invoice_id=invoice.id, relance=1) }}" role="button" class="secondary outline">Relancer</a>{% endif %}
+      {% endif %}
+      {% if can(current_user, "invoice.edit") and not invoice.is_credit %}
+      {% if creditable > 0 %}
+      <form method="post" action="{{ url_for('invoices.credit', invoice_id=invoice.id) }}" data-confirm="Préparer un avoir sur {{ invoice.number }} ? Il reprend toutes les lignes : vous pourrez le réduire avant de l'émettre.">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <button type="submit" class="secondary outline">Faire un avoir</button>
+      </form>
+      {% endif %}
+      <form method="post" action="{{ url_for('invoices.duplicate', invoice_id=invoice.id) }}">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <button type="submit" class="secondary outline">Dupliquer</button>
+      </form>
+      {% endif %}
+    {% endif %}
+  </div>
+</div>
+
+{% if invoice.is_draft %}
+<section class="card issue-card" id="emettre">
+  <h2>{{ icon("check", 18) }} Émettre</h2>
+  {% if problems %}
+  <p>Avant d'émettre, il reste à régler :</p>
+  <ul>{% for p in problems %}<li>{{ p }}</li>{% endfor %}</ul>
+  {% elif can(current_user, "invoice.issue") %}
+  <p class="muted small">Une fois émise, la pièce reçoit le numéro suivant de {{ invoice.issuer.name }}, son PDF est archivé, et elle ne peut plus être modifiée ni supprimée : une erreur se corrige par un avoir.</p>
+  <form method="post" action="{{ url_for('invoices.issue', invoice_id=invoice.id) }}" class="inline-form" data-confirm="Émettre {{ 'cet avoir' if invoice.is_credit else 'cette facture' }} de {{ invoice.total_ttc_cents | money }} ? Elle ne pourra plus être modifiée.">
+    {{ issue_form.hidden_tag() }}
+    <label>{{ issue_form.issue_date.label.text }} {{ issue_form.issue_date() }}</label>
+    <button type="submit">Émettre {{ "l'avoir" if invoice.is_credit else "la facture" }}</button>
+  </form>
+  {% else %}<p class="muted">Prête à émettre. Votre rôle ne permet pas d'émettre : demandez-le à un responsable.</p>{% endif %}
+</section>
+{% endif %}
+
+<div class="detail-grid">
+  <section>
+    <h2>Pièce</h2>
+    <dl class="props">
+      <dt>Émise le</dt><dd>{{ invoice.issue_date | date_fr if invoice.issue_date else "pas encore" }}{% if invoice.issued_by %} <span class="meta muted">par {{ invoice.issued_by.full_name }}</span>{% endif %}</dd>
+      {% if not invoice.is_credit %}<dt>Échéance</dt><dd>{{ invoice.due_date | date_fr if invoice.due_date else ("à l'émission + " ~ invoice.issuer.payment_terms_days ~ " jours") }}</dd>{% endif %}
+      <dt>Prestation</dt><dd>{% if invoice.service_date %}{{ invoice.service_date | date_fr }}{% if invoice.service_end and invoice.service_end != invoice.service_date %} → {{ invoice.service_end | date_fr }}{% endif %}{% else %}—{% endif %}</dd>
+      <dt>Objet</dt><dd>{{ invoice.subject or "—" }}</dd>
+      {% if invoice.customer_reference %}<dt>Réf. client</dt><dd>{{ invoice.customer_reference }}</dd>{% endif %}
+      {% if invoice.credited_invoice %}<dt>Corrige</dt><dd><a href="{{ url_for('invoices.detail', invoice_id=invoice.credited_invoice.id) }}">{{ invoice.credited_invoice.number }}</a></dd>{% endif %}
+      {% if invoice.credit_notes %}<dt>Avoirs</dt><dd>{% for c in invoice.credit_notes %}<a href="{{ url_for('invoices.detail', invoice_id=c.id) }}">{{ c.number or "brouillon" }}</a> ({{ c.total_ttc_cents | money }}){{ ", " if not loop.last }}{% endfor %}</dd>{% endif %}
+      {% if invoice.sent_at %}<dt>Envoyée</dt><dd>{{ invoice.sent_at | datetime_fr }} à {{ invoice.sent_to }}</dd>{% endif %}
+      {% if invoice.internal_note %}<dt>Note interne</dt><dd>{{ invoice.internal_note }}</dd>{% endif %}
+    </dl>
+  </section>
+  <section>
+    <h2>Montants</h2>
+    <dl class="props">
+      {% if invoice.vat_breakdown %}
+      <dt>Total HT</dt><dd>{{ invoice.total_ht_cents | money }}</dd>
+      {% for rate, base, vat in invoice.vat_breakdown %}<dt>TVA {{ rate | rate }}</dt><dd>{{ vat | money }} <span class="muted small">sur {{ base | money }}</span></dd>{% endfor %}
+      {% endif %}
+      <dt>Total{{ " TTC" if invoice.vat_breakdown }}</dt><dd><strong>{{ invoice.total_ttc_cents | money }}</strong></dd>
+      {% if not invoice.is_draft and not invoice.is_credit %}
+      <dt>Réglé</dt><dd>{{ invoice.paid_cents | money }}</dd>
+      {% if invoice.credited_cents %}<dt>Avoirs</dt><dd>− {{ invoice.credited_cents | money }}</dd>{% endif %}
+      <dt>Reste à payer</dt><dd><strong>{{ invoice.balance_cents | money }}</strong></dd>
+      {% endif %}
+    </dl>
+  </section>
+</div>
+
+<h2>Lignes</h2>
+<div class="overflow-auto"><table class="striped responsive">
+  <thead><tr><th>Désignation</th><th class="num">Quantité</th><th class="num">Prix unitaire</th>{% if invoice.vat_breakdown %}<th class="num">TVA</th>{% endif %}<th class="num">Total{{ " HT" if invoice.vat_breakdown }}</th></tr></thead>
+  <tbody>
+  {% for l in invoice.lines %}
+  <tr>
+    <td data-label="Désignation"><span><strong>{{ l.label }}</strong>{% if l.description %}<br><small class="muted">{{ l.description }}</small>{% endif %}</span></td>
+    <td data-label="Quantité" class="num">{{ l.quantity | number }}{% if l.unit %} {{ l.unit }}{% endif %}</td>
+    <td data-label="Prix unitaire" class="num">{{ l.unit_price_cents | money }}</td>
+    {% if invoice.vat_breakdown %}<td data-label="TVA" class="num">{{ l.vat_rate | rate }}</td>{% endif %}
+    <td data-label="Total" class="num">{{ l.total_ht_cents | money }}</td>
+  </tr>
+  {% else %}
+  <tr><td colspan="5" class="muted">Aucune ligne.</td></tr>
+  {% endfor %}
+  </tbody>
+</table></div>
+{% if invoice.notes %}<p><strong>Remarques :</strong> {{ invoice.notes }}</p>{% endif %}
+
+{% if not invoice.is_draft and not invoice.is_credit %}
+<h2 id="reglements">Règlements</h2>
+<div class="overflow-auto"><table class="striped responsive">
+  <thead><tr><th>Reçu le</th><th>Mode</th><th>Référence</th><th class="num">Montant</th><th></th></tr></thead>
+  <tbody>
+  {% for p in invoice.payments %}
+  <tr>
+    <td data-label="Reçu le">{{ p.paid_on | date_fr }}</td>
+    <td data-label="Mode">{{ p.method_label }}</td>
+    <td data-label="Référence"><span>{{ p.reference or "—" }}{% if p.note %}<br><small class="muted">{{ p.note }}</small>{% endif %}</span></td>
+    <td data-label="Montant" class="num">{{ p.amount_cents | money }}</td>
+    <td data-label="" class="actions">{% if can(current_user, "payment.edit") %}
+      <form method="post" action="{{ url_for('invoices.delete_payment', invoice_id=invoice.id, payment_id=p.id) }}" data-confirm="Supprimer ce règlement de {{ p.amount_cents | money }} ?">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <button type="submit" class="link-button">Supprimer</button>
+      </form>{% endif %}</td>
+  </tr>
+  {% else %}
+  <tr><td colspan="5" class="muted">Aucun règlement.</td></tr>
+  {% endfor %}
+  </tbody>
+</table></div>
+{% if can(current_user, "payment.edit") and invoice.balance_cents > 0 %}
+<form method="post" action="{{ url_for('invoices.add_payment', invoice_id=invoice.id) }}" class="card payment-form" novalidate>
+  {{ payment_form.hidden_tag() }}
+  <h3>Enregistrer un règlement</h3>
+  <div class="grid">
+    <div>{{ field(payment_form.amount, inputmode="decimal") }}</div>
+    <div>{{ field(payment_form.paid_on) }}</div>
+    <div>{{ field(payment_form.method) }}</div>
+  </div>
+  <div class="grid"><div>{{ field(payment_form.reference, placeholder="N° de chèque, libellé du virement…") }}</div><div>{{ field(payment_form.note) }}</div></div>
+  <button type="submit" class="secondary">Enregistrer le règlement</button>
+</form>
+{% endif %}
+{% endif %}
+
+{% if history %}
+<h2>Historique</h2>
+<ul class="plain-list small">
+  {% for a in history %}<li><span class="muted">{{ a.created_at | datetime_fr }}</span> · {{ a.message }}{% if a.account %} <span class="muted">({{ a.account.full_name }})</span>{% elif a.api_token %} <span class="muted">(API {{ a.api_token.name }})</span>{% endif %}</li>{% endfor %}
+</ul>
+{% endif %}
+{% endblock %}
