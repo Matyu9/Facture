@@ -32,8 +32,11 @@
   <section>
     <h2>Numérotation et paiement</h2>
     <dl class="props">
-      <dt>Prochaine facture</dt><dd><code>{{ sample }}</code> (si c'est la première de l'année)</dd>
-      <dt>Avoirs</dt><dd><code>{{ issuer.credit_prefix }}AAAA-…</code></dd>
+      {% for row in rows.series if not row.series.archived %}<dt>{{ "Factures" if loop.length == 1 else row.series.name }}</dt><dd>prochaine : <code>{{ row.invoice.sample }}</code><span class="meta muted">avoirs : <code>{{ row.credit.sample }}</code> · remis à 1 {{ row.invoice.reset }}</span></dd>
+      {% endfor %}
+      <dt>Devis</dt><dd>prochain : <code>{{ rows.quote.sample }}</code></dd>
+      {% if manage %}<dt></dt><dd><a href="{{ url_for('issuers.numbers', issuer_id=issuer.id) }}">Modifier la numérotation</a></dd>{% endif %}
+      <dt>Validité des devis</dt><dd>{{ issuer.quote_validity_days }} jour(s)</dd>
       <dt>Délai</dt><dd>{{ issuer.payment_terms_days }} jour(s)</dd>
       <dt>IBAN</dt><dd>{{ issuer.iban or "—" }}{% if issuer.bic %} · {{ issuer.bic }}{% endif %}</dd>
       <dt>Modalités</dt><dd>{{ issuer.payment_instructions or "—" }}</dd>

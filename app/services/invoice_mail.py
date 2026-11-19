@@ -15,6 +15,16 @@ DEFAULT_BODY = (
     "Bien cordialement,\n"
     "{emetteur}"
 )
+# Devis : le texte d'envoi de l'émetteur parle de factures, celui-ci est propre aux devis.
+QUOTE_BODY = (
+    "Bonjour,\n\n"
+    "Veuillez trouver ci-joint notre devis {numero} du {date}, d'un montant de {montant}.\n"
+    "{echeance_phrase}\n"
+    "Pour l'accepter, il suffit de nous le retourner signé avec la mention « Bon pour accord », ou de répondre à ce "
+    "message.\n\n"
+    "Bien cordialement,\n"
+    "{emetteur}"
+)
 REMINDER_BODY = (
     "Bonjour,\n\n"
     "Sauf erreur de notre part, la facture {numero} du {date} reste à régler : {reste} restant dû "
@@ -43,15 +53,20 @@ def values(invoice):
     issuer = invoice.issuer_snapshot or {}
     credit = invoice.kind == Invoice.CREDIT
     due = long_date(invoice.due_date) if invoice.due_date else ""
+    if invoice.is_quote:
+        validity = long_date(invoice.valid_until) if invoice.valid_until else ""
+        phrase = f"Il est valable jusqu'au {validity}." if validity else ""
+    else:
+        phrase = f"Elle est à régler au plus tard le {due}." if due and not credit else ""
     return {
         "type": invoice.kind_label,
-        "type_article": "l'avoir" if credit else "la facture",
+        "type_article": {Invoice.CREDIT: "l'avoir", Invoice.QUOTE: "le devis"}.get(invoice.kind, "la facture"),
         "numero": invoice.number or "",
         "date": long_date(invoice.issue_date),
         "montant": money.amount(invoice.total_ttc_cents),
         "reste": money.amount(invoice.balance_cents),
         "echeance": due,
-        "echeance_phrase": f"Elle est à régler au plus tard le {due}." if due and not credit else "",
+        "echeance_phrase": phrase,
         "client": invoice.recipient_name,
         "emetteur": issuer.get("legal_name") or invoice.issuer.legal_name,
         "objet": invoice.subject or "",
@@ -69,7 +84,10 @@ def default_message(invoice, reminder=False):
     """(objet, texte) proposés dans le formulaire d'envoi."""
     issuer = invoice.issuer
     subject = issuer.email_subject or DEFAULT_SUBJECT
-    body = REMINDER_BODY if reminder else (issuer.email_body or DEFAULT_BODY)
+    if invoice.is_quote:
+        body = QUOTE_BODY
+    else:
+        body = REMINDER_BODY if reminder else (issuer.email_body or DEFAULT_BODY)
     if reminder:
         subject = "Rappel : " + subject
     return fill(subject, invoice), "\n".join(line.rstrip() for line in fill(body, invoice).splitlines()).replace(

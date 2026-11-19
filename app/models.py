@@ -283,10 +283,11 @@ class Issuer(ArchivableMixin, TimestampMixin, db.Model):
     default_vat_rate = db.Column(db.Numeric(5, 2), nullable=False, default=Decimal("20.00"))
     # Mention imprimée sous les totaux (vide : celle du régime).
     vat_mention = db.Column(db.String(255))
-    # Numérotation : <préfixe><année>-<numéro> (FA-2026-0001), reprise à 1 chaque année, séparée pour les avoirs.
-    invoice_prefix = db.Column(db.String(20), nullable=False, default="FA-")
-    credit_prefix = db.Column(db.String(20), nullable=False, default="AV-")
-    number_digits = db.Column(db.Integer, nullable=False, default=4)
+    # Numérotation (services/numbering.py) : factures et avoirs par série (NumberSeries), devis ici.
+    quote_format = db.Column(
+        db.String(40), nullable=False, default="DE-{AAAA}-{NNNN}", server_default="DE-{AAAA}-{NNNN}"
+    )
+    quote_validity_days = db.Column(db.Integer, nullable=False, default=30, server_default="30")
     payment_terms_days = db.Column(db.Integer, nullable=False, default=30)
     iban = db.Column(db.String(40))
     bic = db.Column(db.String(15))
@@ -306,6 +307,21 @@ class Issuer(ArchivableMixin, TimestampMixin, db.Model):
     email_subject = db.Column(db.String(200))
     email_body = db.Column(db.Text)
 
+    series = db.relationship(
+        "NumberSeries",
+        back_populates="issuer",
+        order_by="(NumberSeries.is_default.desc(), NumberSeries.name)",
+        lazy="selectin",
+    )
+
+    @property
+    def default_series(self):
+        return next((s for s in self.series if s.is_default), None)
+
+    @property
+    def active_series(self):
+        return [s for s in self.series if not s.archived]
+
     @property
     def subject_to_vat(self):
         return self.vat_regime == self.SUBJECT
@@ -322,12 +338,38 @@ class Issuer(ArchivableMixin, TimestampMixin, db.Model):
         return f"<Issuer {self.code}>"
 
 
+class NumberSeries(ArchivableMixin, TimestampMixin, db.Model):
+    """Série de numérotation des factures et avoirs d'un émetteur (« Générale », « CE »…), choisie sur chaque facture.
+    Chaque série a ses numéros, continus et sans trou ; une seule est la série par défaut."""
+
+    __table_args__ = (
+        db.UniqueConstraint("issuer_id", "code", name="uq_number_series_issuer_code"),
+        db.Index("uq_number_series_default", "issuer_id", unique=True, postgresql_where=db.text("is_default")),
+    )
+
+    id = db.Column(db.Integer, primary_key=True)
+    issuer_id = db.Column(db.ForeignKey("issuer.id", ondelete="RESTRICT"), nullable=False, index=True)
+    code = db.Column(db.String(30), nullable=False)  # pour l'API : "series": "ce"
+    name = db.Column(db.String(80), nullable=False)
+    invoice_format = db.Column(db.String(40), nullable=False)
+    credit_format = db.Column(db.String(40), nullable=False)
+    is_default = db.Column(db.Boolean, nullable=False, default=False, server_default="0")
+
+    issuer = db.relationship("Issuer", back_populates="series")
+
+    def __repr__(self):
+        return f"<NumberSeries {self.code}>"
+
+
 class NumberSequence(db.Model):
-    """Dernier numéro attribué, par émetteur, type de pièce et année. Lu et incrémenté sous verrou : pas de trou."""
+    """Dernier numéro attribué, par émetteur, type de pièce et période. Lu et incrémenté sous verrou : pas de trou."""
 
     issuer_id = db.Column(db.ForeignKey("issuer.id", ondelete="RESTRICT"), primary_key=True)
-    kind = db.Column(db.String(10), primary_key=True)  # Invoice.INVOICE ou Invoice.CREDIT
-    year = db.Column(db.Integer, primary_key=True)
+    kind = db.Column(db.String(10), primary_key=True)  # Invoice.INVOICE, Invoice.CREDIT ou Invoice.QUOTE
+    # NumberSeries.id pour les factures et avoirs ; 0 pour les devis (une seule série par émetteur).
+    series_id = db.Column(db.Integer, primary_key=True, default=0, server_default="0", autoincrement=False)
+    # « 2026 », « 2026-11 » ou « » (jamais remis à zéro), selon le format de la série.
+    period = db.Column(db.String(7), primary_key=True)
     last_number = db.Column(db.Integer, nullable=False, default=0)
 
 
@@ -412,7 +454,14 @@ class Invoice(TimestampMixin, db.Model):
 
     INVOICE = "facture"
     CREDIT = "avoir"
-    KINDS = {INVOICE: "Facture", CREDIT: "Avoir"}
+    QUOTE = "devis"
+    KINDS = {INVOICE: "Facture", CREDIT: "Avoir", QUOTE: "Devis"}
+    # Pièces comptables (journal des ventes, encaissements) : un devis n'en est pas une.
+    BILLING_KINDS = (INVOICE, CREDIT)
+    # Décision du client sur un devis émis.
+    ACCEPTED = "accepte"
+    REFUSED = "refuse"
+    DECISIONS = {ACCEPTED: "Accepté", REFUSED: "Refusé"}
     DRAFT = "brouillon"
     ISSUED = "emise"
 
@@ -420,6 +469,8 @@ class Invoice(TimestampMixin, db.Model):
     kind = db.Column(db.String(10), nullable=False, default=INVOICE)
     status = db.Column(db.String(12), nullable=False, default=DRAFT, index=True)
     issuer_id = db.Column(db.ForeignKey("issuer.id", ondelete="RESTRICT"), nullable=False, index=True)
+    # Série de numérotation d'une facture ou d'un avoir (celle de sa facture) ; vide pour un devis.
+    series_id = db.Column(db.ForeignKey("number_series.id", ondelete="RESTRICT"), index=True)
     # Vide : destinataire ponctuel, saisi sur la pièce sans fiche client (ses coordonnées sont dans customer_snapshot).
     customer_id = db.Column(db.ForeignKey("customer.id", ondelete="RESTRICT"), index=True)
     number = db.Column(db.String(40), unique=True)
@@ -451,12 +502,18 @@ class Invoice(TimestampMixin, db.Model):
     pdf_sha256 = db.Column(db.String(64))
     sent_at = db.Column(db.DateTime)
     sent_to = db.Column(db.String(255))
+    # Devis : validité, décision du client, et facture qui en est issue (Invoice.quote_id).
+    valid_until = db.Column(db.Date)
+    decision = db.Column(db.String(10))
+    decided_at = db.Column(db.DateTime)
+    quote_id = db.Column(db.ForeignKey("invoice.id", ondelete="RESTRICT"), index=True)
     # Pièce créée par une autre appli (API) : sa référence, et la clé qui rend une nouvelle tentative sans effet.
     source = db.Column(db.String(30))
     external_id = db.Column(db.String(80))
     idempotency_key = db.Column(db.String(80), unique=True)
 
     issuer = db.relationship("Issuer")
+    series = db.relationship("NumberSeries")
     customer = db.relationship("Customer", back_populates="invoices")
     lines = db.relationship(
         "InvoiceLine", back_populates="invoice", order_by="InvoiceLine.position", cascade="all, delete-orphan"
@@ -464,8 +521,14 @@ class Invoice(TimestampMixin, db.Model):
     payments = db.relationship(
         "Payment", back_populates="invoice", order_by="Payment.paid_on", cascade="all, delete-orphan"
     )
-    credited_invoice = db.relationship("Invoice", remote_side=[id], back_populates="credit_notes")
-    credit_notes = db.relationship("Invoice", back_populates="credited_invoice", order_by="Invoice.id")
+    credited_invoice = db.relationship(
+        "Invoice", remote_side=[id], back_populates="credit_notes", foreign_keys=[credited_invoice_id]
+    )
+    credit_notes = db.relationship(
+        "Invoice", back_populates="credited_invoice", order_by="Invoice.id", foreign_keys=[credited_invoice_id]
+    )
+    quote = db.relationship("Invoice", remote_side=[id], back_populates="quote_invoices", foreign_keys=[quote_id])
+    quote_invoices = db.relationship("Invoice", back_populates="quote", order_by="Invoice.id", foreign_keys=[quote_id])
     issued_by = db.relationship("Account", foreign_keys=[issued_by_id])
     created_by = db.relationship("Account", foreign_keys=[created_by_id])
 
@@ -476,6 +539,10 @@ class Invoice(TimestampMixin, db.Model):
     @property
     def is_credit(self):
         return self.kind == self.CREDIT
+
+    @property
+    def is_quote(self):
+        return self.kind == self.QUOTE
 
     @property
     def kind_label(self):
@@ -513,7 +580,7 @@ class Invoice(TimestampMixin, db.Model):
     @property
     def balance_cents(self):
         """Reste à payer d'une facture émise : total, moins les règlements et les avoirs émis."""
-        if self.is_credit or self.is_draft:
+        if self.kind != self.INVOICE or self.is_draft:
             return 0
         return self.total_ttc_cents - self.paid_cents - self.credited_cents
 
@@ -521,7 +588,7 @@ class Invoice(TimestampMixin, db.Model):
     def overdue(self):
         return (
             not self.is_draft
-            and not self.is_credit
+            and self.kind == self.INVOICE
             and self.balance_cents > 0
             and self.due_date is not None
             and self.due_date < date.today()

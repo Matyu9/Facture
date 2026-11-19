@@ -275,7 +275,7 @@ def issuer(app):
 def vat_issuer(app):
     from decimal import Decimal
 
-    from app.models import Issuer
+    from app.models import Issuer, NumberSeries
 
     issuer = Issuer(
         code="orchestre",
@@ -287,10 +287,19 @@ def vat_issuer(app):
         vat_regime=Issuer.SUBJECT,
         vat_number="FR12345678901",
         default_vat_rate=Decimal("20"),
-        invoice_prefix="OR-",
-        credit_prefix="OR-AV-",
+        quote_format="OR-DE-{AAAA}-{NNNN}",
     )
     db.session.add(issuer)
+    db.session.add(
+        NumberSeries(
+            issuer=issuer,
+            code="generale",
+            name="Générale",
+            invoice_format="OR-{AAAA}-{NNNN}",
+            credit_format="OR-AV-{AAAA}-{NNNN}",
+            is_default=True,
+        )
+    )
     db.session.commit()
     return issuer
 

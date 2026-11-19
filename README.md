@@ -1,6 +1,6 @@
 # Facture
 
-La facturation d'une association : factures et avoirs, règlements, PDF archivés, et une API pour que ses autres applis (Adhérents) fassent leurs factures ici.
+La facturation d'une association : devis, factures et avoirs, règlements, PDF archivés, et une API pour que ses autres applis (Adhérents) fassent leurs factures ici.
 
 Elle complète Adhérents (annuaire, cotisations, comptes) et l'Inventaire (matériel prêté). Même socle, même interface : Flask, PostgreSQL, Jinja, HTMX et Pico, sans étape de build.
 
@@ -12,15 +12,16 @@ Elle complète Adhérents (annuaire, cotisations, comptes) et l'Inventaire (mat�
 
 ## Ce que fait l'appli
 
-- **Émetteurs** : l'association, ou chacune de ses régies. Chacun a sa dénomination, son SIRET, son RNA, son régime de TVA (franchise, exonéré, assujetti), sa mention de TVA, sa numérotation, ses coordonnées bancaires, son email d'envoi, et la mise en page de ses factures (disposition, couleur, logo, textes d'introduction et de conclusion), avec aperçu.
+- **Émetteurs** : l'association, ou chacune de ses régies. Chacun a sa dénomination, son SIRET, son RNA, son régime de TVA (franchise, exonéré, assujetti), sa mention de TVA, sa numérotation (plusieurs séries de factures possibles, par exemple une pour les comités d'entreprise ; format libre : année ou non, mois, compteur en chiffres ou en lettres, numéro de départ), ses coordonnées bancaires, son email d'envoi, et la mise en page de ses factures (disposition, couleur, logo, textes d'introduction et de conclusion), avec aperçu.
 - **Clients** : structures (mairies, comités, entreprises) et particuliers (familles). Un client venu d'Adhérents garde sa référence et est tenu à jour à chaque facture. Une facture peut aussi s'adresser à un destinataire ponctuel, saisi sur la pièce sans créer de fiche (et enregistré plus tard si besoin).
 - **Articles** : les prestations qui reviennent (concert, animation, location…), pour remplir une ligne en un clic.
+- **Devis** : même saisie que les factures, numérotés dans leur propre série, avec une date de validité et un cadre « Bon pour accord » sur le PDF. Envoi par email, réponse du client (accepté, refusé, expiré), puis transformation en facture d'un clic.
 - **Factures** : brouillon modifiable, aperçu PDF marqué « BROUILLON », puis émission. L'émission donne le numéro suivant (`FA-2026-0001`, par émetteur, type de pièce et année, sans trou), fige l'émetteur et le client tels qu'ils sont ce jour-là et archive le PDF avec son empreinte. Une pièce émise ne se modifie ni ne se supprime.
 - **Avoirs** : total ou partiel, ils corrigent une facture émise. Leur propre série de numéros.
 - **Règlements** : virement, chèque, espèces, carte, prélèvement, paiement en ligne, chèques vacances. Reste à payer, factures en retard signalées une fois aux personnes qui suivent les règlements.
 - **Envoi** par email avec le PDF archivé en pièce jointe, et relance.
 - **Journal des ventes** en CSV (une ligne par taux de TVA, avoirs en négatif), pour le trésorier ou le comptable.
-- **API** (`/api/v1`) : une appli crée des brouillons, ou des factures émises si son jeton le permet, et lit leurs états et leurs PDF. Voir [docs/api.md](docs/api.md).
+- **API** (`/api/v1`) : une appli crée des factures et des devis (brouillons, ou émis si son jeton le permet), les émet, les envoie par email, note la réponse à un devis et en tire la facture, et lit leurs états et leurs PDF. Voir [docs/api.md](docs/api.md).
 - **Connexion** par mot de passe (avec double authentification) ou par Adhérents (OIDC), avec le rôle déduit des groupes. Rôles et droits réglables, journal de toutes les actions.
 
 ## Rôles

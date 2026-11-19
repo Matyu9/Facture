@@ -2,7 +2,9 @@
 {% from "partials/_avatar.html" import avatar %}
 {% from "partials/_brand.html" import brand_mark with context %}
 {%- macro navlink(endpoint, label, icon_name, prefixes=none) -%}
-  {%- set active = request.endpoint and (request.endpoint == endpoint or (prefixes and request.endpoint.split(".")[0] in prefixes)) -%}
+  {#- Un devis s'affiche et se modifie par les routes des factures : le menu « Devis » reste allumé. -#}
+  {%- set section = "quotes" if (request.blueprint == "invoices" and invoice is defined and invoice.is_quote) else (request.endpoint or "").split(".")[0] -%}
+  {%- set active = request.endpoint and ((request.endpoint == endpoint and section != "quotes") or (prefixes and section in prefixes)) -%}
   <a href="{{ url_for(endpoint) }}" class="nav-link{{ ' active' if active }}" {% if active %}aria-current="page"{% endif %}>{{ icon(icon_name) }}<span>{{ label }}</span></a>
 {%- endmacro -%}
 {%- set theme = current_user.theme if current_user.is_authenticated else none -%}
@@ -37,6 +39,7 @@
       {{ navlink("notifications.index", "Notifications", "bell", ["notifications"]) }}
       {% if can(current_user, "invoice.view") %}
       <p class="nav-title">Facturation</p>
+      {{ navlink("quotes.index", "Devis", "clipboard", ["quotes"]) }}
       {{ navlink("invoices.index", "Factures", "file", ["invoices"]) }}
       {{ navlink("customers.index", "Clients", "users", ["customers"]) }}
       {{ navlink("products.index", "Articles", "tag", ["products"]) }}

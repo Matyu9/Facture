@@ -5,7 +5,10 @@
 {% block title %}{{ invoice.kind_label }} en brouillon{% endblock %}
 {% block content %}
 <p><a href="{{ url_for('invoices.detail', invoice_id=invoice.id) }}">← {{ invoice.kind_label }} en brouillon</a></p>
-<h1>{{ "Avoir" if invoice.is_credit else "Facture" }} en brouillon</h1>
+<h1>{{ invoice.kind_label }} en brouillon</h1>
+{% if invoice.quote %}
+<p class="flash flash-info">Facture tirée du devis <a href="{{ url_for('invoices.detail', invoice_id=invoice.quote.id) }}">{{ invoice.quote.number }}</a>.</p>
+{% endif %}
 {% if invoice.is_credit and invoice.credited_invoice %}
 <p class="flash flash-info">Avoir sur la facture <a href="{{ url_for('invoices.detail', invoice_id=invoice.credited_invoice.id) }}">{{ invoice.credited_invoice.number }}</a> ({{ invoice.credited_invoice.total_ttc_cents | money }}). Pour un avoir partiel, réduisez les quantités ou les prix, ou retirez des lignes.</p>
 {% endif %}
@@ -15,6 +18,11 @@
 <form method="post" novalidate class="invoice-form">
   {{ form.hidden_tag() }}
   {{ field(form.issuer_id, disabled=invoice.is_credit) }}{% if invoice.is_credit %}<input type="hidden" name="issuer_id" value="{{ invoice.issuer_id }}">{% endif %}
+  {% if invoice.kind == "facture" and form.series_id.choices | length > 1 %}
+  {{ field(form.series_id) }}<small class="muted">Chaque série a ses propres numéros. Si vous changez d'émetteur, la facture prend sa série par défaut.</small>
+  {% elif invoice.is_credit and invoice.series and invoice.issuer.series | length > 1 %}
+  <p><span class="muted">Série :</span> {{ invoice.series.name }} <small class="muted">(celle de la facture corrigée)</small></p>
+  {% endif %}
   {% if invoice.is_credit %}
   <input type="hidden" name="recipient_mode" value="{{ 'ponctuel' if invoice.is_one_off else 'client' }}">
   <input type="hidden" name="customer_id" value="{{ invoice.customer_id or 0 }}">
@@ -26,7 +34,8 @@
   <div class="grid">
     <div>{{ field(form.service_date) }}</div>
     <div>{{ field(form.service_end) }}</div>
-    {% if not invoice.is_credit %}<div>{{ field(form.due_date) }}<small class="muted">Vide : {{ invoice.issuer.payment_terms_days }} jours après l'émission.</small></div>{% endif %}
+    {% if invoice.is_quote %}<div>{{ field(form.valid_until) }}<small class="muted">Vide : {{ invoice.issuer.quote_validity_days }} jours après l'émission.</small></div>
+    {% elif not invoice.is_credit %}<div>{{ field(form.due_date) }}<small class="muted">Vide : {{ invoice.issuer.payment_terms_days }} jours après l'émission.</small></div>{% endif %}
   </div>
   {{ field(form.customer_reference, placeholder="Bon de commande, engagement…") }}
 

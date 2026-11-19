@@ -1,6 +1,8 @@
 """Factures et avoirs : calcul, émission, numérotation, règlements.
 
 Règles :
+- un devis suit le même chemin (brouillon, puis émission numérotée dans sa propre série) ; il n'est pas une pièce
+  comptable : ni règlement, ni avoir, ni journal des ventes. Accepté, il se transforme en facture ;
 - un brouillon se modifie et se supprime librement ; il n'a pas de numéro ;
 - l'émission attribue le numéro suivant de l'émetteur (par type de pièce et par année, sans trou), fige une copie de
   l'émetteur et du client, et archive le PDF : la pièce ne change plus ;
@@ -15,8 +17,8 @@ from datetime import date, datetime, timedelta
 from decimal import Decimal
 
 from ..extensions import db
-from ..models import RECIPIENT_FIELDS, Customer, Invoice, InvoiceLine, Issuer, NumberSequence, Payment
-from . import archive, money
+from ..models import RECIPIENT_FIELDS, Customer, Invoice, InvoiceLine, Issuer, NumberSequence, NumberSeries, Payment
+from . import archive, money, numbering
 
 # Mention des pénalités de retard, obligatoire entre professionnels (art. L441-10 du code de commerce), imprimée quand
 # l'émetteur n'en a pas saisi une à lui.
@@ -122,7 +124,8 @@ def new_draft(issuer, customer, by=None, kind=Invoice.INVOICE, recipient=None):
         raise BillingError("Cet émetteur est archivé.")
     if customer is not None and customer.archived:
         raise BillingError("Ce client est archivé.")
-    invoice = Invoice(kind=kind, status=Invoice.DRAFT, issuer=issuer, customer=customer, created_by=by)
+    series = None if kind == Invoice.QUOTE else default_series(issuer)
+    invoice = Invoice(kind=kind, status=Invoice.DRAFT, issuer=issuer, series=series, customer=customer, created_by=by)
     if customer is None:
         set_recipient(invoice, recipient or {})
     db.session.add(invoice)
@@ -196,10 +199,79 @@ def change_issuer(invoice, issuer):
         raise BillingError("Cet émetteur est archivé.")
     previous = invoice.issuer
     invoice.issuer = issuer
+    if not invoice.is_quote and (invoice.series is None or invoice.series.issuer is not issuer):
+        invoice.series = default_series(issuer)
     if issuer.subject_to_vat and not (previous and previous.subject_to_vat):
         for line in invoice.lines:
             line.vat_rate = default_vat_rate(issuer, line.product)
     compute(invoice)
+
+
+def set_series(invoice, series):
+    """Le brouillon de facture sera numéroté dans cette série de son émetteur."""
+    _require_draft(invoice)
+    if invoice.series is series:
+        return
+    if invoice.kind != Invoice.INVOICE:
+        raise BillingError("Seule une facture se range dans une série : un avoir suit sa facture.")
+    if series.issuer_id != invoice.issuer.id:
+        raise BillingError("Cette série appartient à un autre émetteur.")
+    if series.archived:
+        raise BillingError(f"La série « {series.name} » est archivée.")
+    invoice.series = series
+
+
+# ---------------------------------------------------------------------------
+# Séries de numérotation
+# ---------------------------------------------------------------------------
+
+DEFAULT_SERIES_CODE = "generale"
+DEFAULT_SERIES_NAME = "Générale"
+
+
+def default_series(issuer):
+    """Série par défaut de l'émetteur, créée au besoin (FA-…, AV-… ; précédés du code de l'émetteur s'ils sont déjà
+    pris par un autre)."""
+    series = issuer.default_series
+    if series is not None:
+        return series
+    taken = taken_signatures()
+    formats = {}
+    for kind in Invoice.BILLING_KINDS:
+        fmt = numbering.parse(numbering.default(kind))
+        formats[kind] = fmt.text if fmt.signature not in taken else f"{issuer.code.upper()[:20]}-{fmt.text}"
+    series = NumberSeries(
+        issuer=issuer,
+        code=DEFAULT_SERIES_CODE,
+        name=DEFAULT_SERIES_NAME,
+        invoice_format=formats[Invoice.INVOICE],
+        credit_format=formats[Invoice.CREDIT],
+        is_default=True,
+    )
+    db.session.add(series)
+    return series
+
+
+def find_series(issuer, code):
+    return next((s for s in issuer.series if s.code == code), None)
+
+
+def taken_signatures(skip_series=None, skip_quote_of=None):
+    """Formes de numéro déjà utilisées dans l'appli, avec leur propriétaire : les numéros sont uniques partout,
+    deux séries ne doivent pas pouvoir produire le même."""
+    taken = {}
+    with db.session.no_autoflush:
+        all_series = db.session.scalars(db.select(NumberSeries).order_by(NumberSeries.id)).all()
+    for series in all_series:
+        if series is skip_series:
+            continue
+        owner = f"{series.issuer.name}, série « {series.name} »"
+        taken.setdefault(numbering.of(series.issuer, Invoice.INVOICE, series).signature, f"factures de {owner}")
+        taken.setdefault(numbering.of(series.issuer, Invoice.CREDIT, series).signature, f"avoirs de {owner}")
+    for issuer in issuers(include_archived=True):
+        if issuer is not skip_quote_of:
+            taken.setdefault(numbering.of(issuer, Invoice.QUOTE).signature, f"devis de {issuer.name}")
+    return taken
 
 
 # ---------------------------------------------------------------------------
@@ -246,12 +318,14 @@ def customer_snapshot(customer):
     return customer.snapshot()
 
 
-def last_issue_date(issuer, kind):
-    return db.session.scalar(
-        db.select(db.func.max(Invoice.issue_date)).where(
-            Invoice.issuer_id == issuer.id, Invoice.kind == kind, Invoice.status == Invoice.ISSUED
-        )
+def last_issue_date(issuer, kind, series=None):
+    """Date de la dernière pièce émise dans la série : les numéros d'une série suivent l'ordre des dates."""
+    query = db.select(db.func.max(Invoice.issue_date)).where(
+        Invoice.issuer_id == issuer.id, Invoice.kind == kind, Invoice.status == Invoice.ISSUED
     )
+    if series is not None:
+        query = query.where(Invoice.series_id == series.id)
+    return db.session.scalar(query)
 
 
 def problems(invoice, issue_date=None):
@@ -277,13 +351,17 @@ def problems(invoice, issue_date=None):
         found.append("Une ligne n'a pas de désignation.")
     if invoice.total_ttc_cents <= 0:
         found.append("Le total doit être positif.")
-    if invoice.service_date is None:
+    if invoice.service_date is None and not invoice.is_quote:
         found.append("Indiquez la date de la prestation (ou de la vente) : c'est une mention obligatoire.")
+    if invoice.series is not None and invoice.series.archived and invoice.kind == Invoice.INVOICE:
+        found.append(f"La série « {invoice.series.name} » est archivée : choisissez-en une autre.")
+    if invoice.is_quote and invoice.valid_until and invoice.valid_until < issue_date:
+        found.append("La date de validité du devis est avant sa date d'émission.")
     if invoice.service_end and invoice.service_date and invoice.service_end < invoice.service_date:
         found.append("La fin de la période est avant son début.")
     if invoice.due_date and invoice.due_date < issue_date:
         found.append("L'échéance est avant la date d'émission.")
-    last = last_issue_date(issuer, invoice.kind)
+    last = last_issue_date(issuer, invoice.kind, invoice.series)
     if last and issue_date < last:
         found.append(
             f"La date d'émission ne peut pas être avant celle de la dernière pièce émise ({last:%d/%m/%Y}) : "
@@ -301,20 +379,82 @@ def problems(invoice, issue_date=None):
     return found
 
 
-def _next_number(issuer, kind, year):
+def _sequence(issuer, kind, series, period, lock=True):
+    query = db.select(NumberSequence).where(
+        NumberSequence.issuer_id == issuer.id,
+        NumberSequence.kind == kind,
+        NumberSequence.series_id == (series.id if series is not None else 0),
+        NumberSequence.period == period,
+    )
+    sequence = db.session.scalar(query.with_for_update() if lock else query)
+    if sequence is None and lock:
+        sequence = NumberSequence(
+            issuer_id=issuer.id,
+            kind=kind,
+            series_id=series.id if series is not None else 0,
+            period=period,
+            last_number=0,
+        )
+        db.session.add(sequence)
+    return sequence
+
+
+def _series_for(issuer, kind, series):
+    if kind == Invoice.QUOTE:
+        return None
+    return series or default_series(issuer)
+
+
+def _next_number(issuer, kind, day, series=None):
     """Prend le numéro suivant de la série, sous verrou de ligne : deux émissions simultanées ne l'auront pas toutes
     les deux. La transaction qui échoue ensuite rend le numéro (rien n'est validé) : pas de trou."""
-    sequence = db.session.scalar(
-        db.select(NumberSequence)
-        .where(NumberSequence.issuer_id == issuer.id, NumberSequence.kind == kind, NumberSequence.year == year)
-        .with_for_update()
-    )
-    if sequence is None:
-        sequence = NumberSequence(issuer_id=issuer.id, kind=kind, year=year, last_number=0)
-        db.session.add(sequence)
+    series = _series_for(issuer, kind, series)
+    fmt = numbering.of(issuer, kind, series)
+    sequence = _sequence(issuer, kind, series, fmt.period(day))
     sequence.last_number += 1
-    prefix = issuer.credit_prefix if kind == Invoice.CREDIT else issuer.invoice_prefix
-    return sequence.last_number, f"{prefix}{year}-{sequence.last_number:0{issuer.number_digits}d}"
+    number = fmt.render(day, sequence.last_number)
+    # Un format changé en cours de route peut retomber sur un numéro déjà donné : on refuse plutôt que de doubler.
+    if db.session.scalar(db.select(Invoice.id).where(Invoice.number == number)):
+        raise BillingError(
+            f"Le numéro {number} est déjà pris par une autre pièce. Changez le format de numérotation de "
+            f"l'émetteur ou son prochain numéro."
+        )
+    return sequence.last_number, number
+
+
+def next_number(issuer, kind, day=None, series=None):
+    """Prochain compteur de la série en cours (sans le prendre) : pour l'afficher et le régler."""
+    day = day or date.today()
+    series = _series_for(issuer, kind, series)
+    sequence = _sequence(issuer, kind, series, numbering.of(issuer, kind, series).period(day), lock=False)
+    return (sequence.last_number if sequence else 0) + 1
+
+
+def lowest_next_number(issuer, kind, day=None, series=None):
+    """Plus petit « prochain numéro » acceptable : au-delà de toutes les pièces émises dans la période en cours."""
+    day = day or date.today()
+    series = _series_for(issuer, kind, series)
+    fmt = numbering.of(issuer, kind, series)
+    query = db.select(db.func.max(Invoice.sequence_number)).where(
+        Invoice.issuer_id == issuer.id, Invoice.kind == kind, Invoice.status == Invoice.ISSUED
+    )
+    if series is not None and series.id is not None:
+        query = query.where(Invoice.series_id == series.id)
+    if fmt.reset != numbering.NEVER:
+        query = query.where(db.extract("year", Invoice.issue_date) == day.year)
+    if fmt.reset == numbering.MONTHLY:
+        query = query.where(db.extract("month", Invoice.issue_date) == day.month)
+    return (db.session.scalar(query) or 0) + 1
+
+
+def set_next_number(issuer, kind, value, day=None, series=None):
+    """Règle le compteur de la série en cours (reprise d'une numérotation commencée ailleurs)."""
+    day = day or date.today()
+    series = _series_for(issuer, kind, series)
+    if value < lowest_next_number(issuer, kind, day, series):
+        raise BillingError("Ce numéro a déjà été donné dans la période en cours.")
+    db.session.flush()  # une série toute neuve a besoin de son id
+    _sequence(issuer, kind, series, numbering.of(issuer, kind, series).period(day)).last_number = value - 1
 
 
 def issue(invoice, by=None, issue_date=None):
@@ -327,14 +467,27 @@ def issue(invoice, by=None, issue_date=None):
     if found:
         raise BillingError(" ".join(found))
     issuer = invoice.issuer
+    if invoice.is_credit and invoice.credited_invoice is not None:
+        invoice.series = invoice.credited_invoice.series
+    if not invoice.is_quote and invoice.series is None:
+        invoice.series = default_series(issuer)
+    db.session.flush()
     invoice.sequence_year = issue_date.year
-    invoice.sequence_number, invoice.number = _next_number(issuer, invoice.kind, issue_date.year)
+    invoice.sequence_number, invoice.number = _next_number(issuer, invoice.kind, issue_date, invoice.series)
     invoice.issue_date = issue_date
-    if invoice.due_date is None and not invoice.is_credit:
+    if invoice.is_quote:
+        invoice.due_date = None
+        if invoice.valid_until is None:
+            invoice.valid_until = issue_date + timedelta(days=issuer.quote_validity_days)
+    elif invoice.due_date is None and not invoice.is_credit:
         invoice.due_date = issue_date + timedelta(days=issuer.payment_terms_days)
     invoice.issuer_snapshot = issuer_snapshot(issuer)
     invoice.customer_snapshot = invoice.recipient
-    if invoice.customer_snapshot.get("kind") == Customer.ORGANISATION and not issuer.late_penalty:
+    if (
+        invoice.kind == Invoice.INVOICE
+        and invoice.customer_snapshot.get("kind") == Customer.ORGANISATION
+        and not issuer.late_penalty
+    ):
         invoice.issuer_snapshot["late_penalty"] = DEFAULT_LATE_PENALTY
     invoice.status = Invoice.ISSUED
     invoice.issued_at = datetime.now()
@@ -363,7 +516,7 @@ def creditable_cents(invoice):
 
 def new_credit_note(invoice, by=None):
     """Brouillon d'avoir qui reprend toutes les lignes de la facture (à réduire pour un avoir partiel)."""
-    if invoice.is_credit or invoice.status != Invoice.ISSUED:
+    if invoice.kind != Invoice.INVOICE or invoice.status != Invoice.ISSUED:
         raise BillingError("Seule une facture émise peut être corrigée par un avoir.")
     if creditable_cents(invoice) <= 0:
         raise BillingError("Cette facture est déjà entièrement annulée par des avoirs.")
@@ -372,6 +525,7 @@ def new_credit_note(invoice, by=None):
         raise BillingError("Un avoir est déjà en préparation pour cette facture : terminez-le ou supprimez-le.")
     credit = new_draft(invoice.issuer, invoice.customer, by, kind=Invoice.CREDIT, recipient=_one_off(invoice))
     credit.credited_invoice = invoice
+    credit.series = invoice.series
     credit.subject = f"Avoir sur la facture {invoice.number}" + (f" : {invoice.subject}" if invoice.subject else "")
     credit.service_date = invoice.service_date
     credit.service_end = invoice.service_end
@@ -394,16 +548,9 @@ def new_credit_note(invoice, by=None):
     return credit
 
 
-def duplicate(invoice, by=None):
-    """Nouveau brouillon de facture, avec le même émetteur, le même client et les mêmes lignes."""
-    if invoice.is_credit:
-        raise BillingError("Un avoir ne se duplique pas.")
-    copy = new_draft(invoice.issuer, invoice.customer, by, recipient=_one_off(invoice))
-    copy.subject = invoice.subject
-    copy.notes = invoice.notes
-    copy.customer_reference = invoice.customer_reference
+def _copy_lines(source, target):
     set_lines(
-        copy,
+        target,
         [
             LineInput(
                 label=line.label,
@@ -411,13 +558,74 @@ def duplicate(invoice, by=None):
                 quantity=line.quantity,
                 unit=line.unit,
                 unit_price_cents=line.unit_price_cents,
-                vat_rate=default_vat_rate(invoice.issuer) if line.product is None else line.vat_rate,
+                vat_rate=line.vat_rate if source.issuer.subject_to_vat else default_vat_rate(target.issuer),
                 product_id=line.product_id,
             )
-            for line in invoice.lines
+            for line in source.lines
         ],
     )
+
+
+def duplicate(invoice, by=None):
+    """Nouveau brouillon du même type (facture ou devis), avec le même émetteur, le même client et les mêmes
+    lignes."""
+    if invoice.is_credit:
+        raise BillingError("Un avoir ne se duplique pas.")
+    copy = new_draft(invoice.issuer, invoice.customer, by, kind=invoice.kind, recipient=_one_off(invoice))
+    if invoice.series is not None and not invoice.series.archived and invoice.kind == Invoice.INVOICE:
+        copy.series = invoice.series
+    copy.subject = invoice.subject
+    copy.notes = invoice.notes
+    copy.customer_reference = invoice.customer_reference
+    _copy_lines(invoice, copy)
     return copy
+
+
+# ---------------------------------------------------------------------------
+# Devis
+# ---------------------------------------------------------------------------
+
+
+def _require_issued_quote(quote):
+    if not quote.is_quote or quote.status != Invoice.ISSUED:
+        raise BillingError("Cette action concerne un devis émis.")
+
+
+def decide(quote, decision, by=None):
+    """Le client accepte ou refuse le devis ; None le remet en attente. Sans commit."""
+    _require_issued_quote(quote)
+    if decision not in (None, *Invoice.DECISIONS):
+        raise BillingError("Décision inconnue.")
+    if decision != Invoice.ACCEPTED and any(not i.is_credit for i in quote.quote_invoices):
+        raise BillingError("Ce devis a déjà été facturé : il reste accepté.")
+    quote.decision = decision
+    quote.decided_at = datetime.now() if decision else None
+
+
+def invoice_from_quote(quote, by=None, series=None):
+    """Brouillon de facture reprenant le devis (destinataire, objet, lignes). Le devis est accepté au passage."""
+    _require_issued_quote(quote)
+    if quote.decision == Invoice.REFUSED:
+        raise BillingError("Ce devis a été refusé : remettez-le en attente avant de le facturer.")
+    if quote.quote_invoices:
+        raise BillingError("Ce devis a déjà sa facture : retrouvez-la depuis la fiche du devis.")
+    if quote.issuer.archived:
+        raise BillingError("L'émetteur de ce devis est archivé.")
+    customer = quote.customer if quote.customer is not None and not quote.customer.archived else None
+    recipient = None if customer is not None else quote.recipient
+    invoice = new_draft(quote.issuer, customer, by, recipient=recipient)
+    if series is not None:
+        set_series(invoice, series)
+    invoice.quote = quote
+    invoice.subject = quote.subject
+    invoice.notes = quote.notes
+    invoice.customer_reference = quote.customer_reference
+    invoice.service_date = quote.service_date
+    invoice.service_end = quote.service_end
+    _copy_lines(quote, invoice)
+    if quote.decision is None:
+        decide(quote, Invoice.ACCEPTED, by)
+    return invoice
 
 
 # ---------------------------------------------------------------------------
@@ -426,7 +634,7 @@ def duplicate(invoice, by=None):
 
 
 def add_payment(invoice, amount_cents, paid_on, method, reference=None, note=None, by=None):
-    if invoice.is_credit or invoice.status != Invoice.ISSUED:
+    if invoice.kind != Invoice.INVOICE or invoice.status != Invoice.ISSUED:
         raise BillingError("Un règlement s'enregistre sur une facture émise.")
     if method not in Payment.METHODS:
         raise BillingError("Mode de règlement inconnu.")
@@ -475,8 +683,38 @@ STATES = {
 }
 TONES = {DRAFT: "", DUE: "badge-info", LATE: "badge-warn", PARTIAL: "badge-info", PAID: "badge-ok", CANCELLED: ""}
 
+# États d'un devis émis.
+PENDING, ACCEPTED, REFUSED, EXPIRED, INVOICED = "en_attente", "accepte", "refuse", "expire", "facture"
+QUOTE_STATES = {
+    DRAFT: "Brouillon",
+    PENDING: "En attente",
+    ACCEPTED: "Accepté",
+    REFUSED: "Refusé",
+    EXPIRED: "Expiré",
+    INVOICED: "Facturé",
+}
+INVOICE_STATES = dict(STATES)  # filtres de la liste des factures
+STATES.update({k: v for k, v in QUOTE_STATES.items() if k != DRAFT})
+TONES.update({PENDING: "badge-info", ACCEPTED: "badge-ok", REFUSED: "", EXPIRED: "badge-warn", INVOICED: "badge-ok"})
+
+
+def quote_state(quote):
+    if quote.is_draft:
+        return DRAFT
+    if any(not i.is_credit for i in quote.quote_invoices):
+        return INVOICED
+    if quote.decision == Invoice.ACCEPTED:
+        return ACCEPTED
+    if quote.decision == Invoice.REFUSED:
+        return REFUSED
+    if quote.valid_until and quote.valid_until < date.today():
+        return EXPIRED
+    return PENDING
+
 
 def state(invoice):
+    if invoice.is_quote:
+        return quote_state(invoice)
     if invoice.is_draft:
         return DRAFT
     if invoice.is_credit:

@@ -1,10 +1,11 @@
 {% extends "base.html" %}
 {% from "partials/_form.html" import field %}
 {% from "invoices/_recipient.html" import recipient_block %}
-{% block title %}Nouvelle facture{% endblock %}
+{% set quote = kind == "devis" %}
+{% block title %}{{ "Nouveau devis" if quote else "Nouvelle facture" }}{% endblock %}
 {% block content %}
-<p><a href="{{ url_for('invoices.index') }}">← Factures</a></p>
-<h1>Nouvelle facture</h1>
+<p><a href="{{ url_for('quotes.index' if quote else 'invoices.index') }}">← {{ "Devis" if quote else "Factures" }}</a></p>
+<h1>{{ "Nouveau devis" if quote else "Nouvelle facture" }}</h1>
 <form method="post" novalidate>
   {{ form.hidden_tag() }}
   {{ field(form.issuer_id) }}

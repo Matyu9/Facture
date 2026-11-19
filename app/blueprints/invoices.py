@@ -2,7 +2,7 @@
 
 import csv
 import io
-from datetime import date
+from datetime import date, timedelta
 from decimal import Decimal
 
 from flask import Blueprint, Response, abort, flash, redirect, render_template, request, url_for
@@ -13,7 +13,7 @@ from wtforms import BooleanField, DateField, RadioField, SelectField, StringFiel
 from wtforms.validators import DataRequired, Length, Optional, Regexp
 
 from ..extensions import db, fold_contains
-from ..models import RECIPIENT_FIELDS, Activity, Customer, Invoice, Issuer, Payment, Product
+from ..models import RECIPIENT_FIELDS, Activity, Customer, Invoice, Issuer, NumberSeries, Payment, Product
 from ..permissions import can, require
 from ..services import archive, billing, customers, invoice_mail, money, pdf
 from ..services.activity import log
@@ -82,10 +82,15 @@ class NewForm(RecipientChoice, FlaskForm):
 
 class HeaderForm(RecipientChoice, FlaskForm):
     issuer_id = SelectField("Émetteur", coerce=int)
+    # Les séries de l'émetteur du brouillon ; s'il change d'émetteur, la facture prend la série par défaut du nouveau.
+    series_id = SelectField(
+        "Série de numérotation", coerce=lambda v: int(v) if str(v or "").isdigit() else 0, validate_choice=False
+    )
     subject = StringField("Objet", validators=[Optional(), Length(max=255)])
     service_date = DateField("Date de la prestation", validators=[Optional()])
     service_end = DateField("Jusqu'au (période)", validators=[Optional()])
     due_date = DateField("Échéance", validators=[Optional()])
+    valid_until = DateField("Valable jusqu'au", validators=[Optional()])
     customer_reference = StringField("Référence du client", validators=[Optional(), Length(max=80)])
     notes = TextAreaField("Remarques imprimées", validators=[Optional(), Length(max=2000)])
     internal_note = TextAreaField("Note interne", validators=[Optional(), Length(max=2000)])
@@ -95,6 +100,13 @@ class HeaderForm(RecipientChoice, FlaskForm):
         self.issuer_id.choices = [(i.id, i.name) for i in billing.issuers()]
         if invoice is not None and invoice.issuer.archived:
             self.issuer_id.choices.insert(0, (invoice.issuer.id, invoice.issuer.name + " (archivé)"))
+        self.series_id.choices = []
+        if invoice is not None:
+            self.series_id.choices = [
+                (s.id, s.name + (" (archivée)" if s.archived else ""))
+                for s in invoice.issuer.series
+                if not s.archived or s is invoice.series
+            ]
         self._customer_choices(invoice.customer if invoice is not None else None)
 
 
@@ -244,9 +256,11 @@ def _rows_of(invoice):
     ]
 
 
-def _filters():
+def _filters(kinds=Invoice.BILLING_KINDS):
+    """Requête de la liste d'après les filtres de l'adresse. Par défaut, les pièces comptables (factures et avoirs) ;
+    la liste des devis passe kinds=(Invoice.QUOTE,)."""
     args = request.args
-    query = db.select(Invoice).outerjoin(Customer)
+    query = db.select(Invoice).outerjoin(Customer).where(Invoice.kind.in_(kinds))
     q = (args.get("q") or "").strip()
     if q:
         query = query.where(
@@ -260,8 +274,13 @@ def _filters():
     issuer = db.session.get(Issuer, args.get("emetteur", type=int) or 0)
     if issuer:
         query = query.where(Invoice.issuer_id == issuer.id)
+    series = db.session.get(NumberSeries, args.get("serie", type=int) or 0) if Invoice.QUOTE not in kinds else None
+    if series:
+        query = query.where(Invoice.series_id == series.id)
     kind = args.get("type")
-    if kind in Invoice.KINDS:
+    if kind not in kinds:
+        kind = None
+    if kind:
         query = query.where(Invoice.kind == kind)
     year = args.get("annee", type=int)
     if year:
@@ -286,7 +305,8 @@ def _filters():
         for k, v in {
             "q": q,
             "emetteur": issuer.id if issuer else None,
-            "type": kind if kind in Invoice.KINDS else None,
+            "serie": series.id if series else None,
+            "type": kind,
             "annee": year,
             "du": since.isoformat() if since else None,
             "au": until.isoformat() if until else None,
@@ -343,13 +363,26 @@ def index():
         params=params,
         summary=summary,
         issuers=billing.issuers(include_archived=True),
+        all_series=_listed_series(),
         years=years,
-        states=billing.STATES,
+        states=billing.INVOICE_STATES,
         state=billing.state,
         tones=billing.TONES,
-        kinds=Invoice.KINDS,
+        kinds={k: Invoice.KINDS[k] for k in Invoice.BILLING_KINDS},
         edit=can(current_user, "invoice.edit"),
     )
+
+
+def _listed_series():
+    """Séries proposées dans le filtre de la liste : seulement s'il y en a plus d'une par émetteur quelque part."""
+    series = db.session.scalars(db.select(NumberSeries).order_by(NumberSeries.issuer_id, NumberSeries.name)).all()
+    by_issuer = {}
+    for s in series:
+        by_issuer.setdefault(s.issuer_id, []).append(s)
+    if all(len(group) < 2 for group in by_issuer.values()):
+        return []
+    many = len(by_issuer) > 1
+    return [(s.id, f"{s.issuer.name} · {s.name}" if many else s.name) for s in series]
 
 
 @bp.route("/export.csv")
@@ -385,6 +418,7 @@ def export():
             "Réglé",
             "Reste à payer",
             "Facture corrigée",
+            "Série",
         ]
     )
 
@@ -412,6 +446,7 @@ def export():
                     fmt(invoice.paid_cents) if first and not invoice.is_credit else "",
                     fmt(invoice.balance_cents) if first and not invoice.is_credit else "",
                     invoice.credited_invoice.number if invoice.credited_invoice else "",
+                    invoice.series.name if invoice.series else "",
                 ]
             )
     log("invoice.export", f"Export du journal des ventes ({len(items)} pièce(s))")
@@ -432,6 +467,11 @@ def export():
 @bp.route("/nouvelle", methods=["GET", "POST"])
 @require("invoice.edit")
 def create():
+    return create_piece(Invoice.INVOICE)
+
+
+def create_piece(kind):
+    """Nouveau brouillon de facture ou de devis (la route des devis appelle aussi cette fonction)."""
     form = NewForm()
     dest = RecipientForm()
     if request.method == "GET":
@@ -448,22 +488,25 @@ def create():
         ok, customer, recipient = _chosen_recipient(form, dest)
         if ok:
             try:
-                invoice = billing.new_draft(issuer, customer, by=current_user, recipient=recipient)
+                invoice = billing.new_draft(issuer, customer, by=current_user, kind=kind, recipient=recipient)
             except billing.BillingError as exc:
                 db.session.rollback()
                 flash(str(exc), "error")
             else:
-                invoice.service_date = date.today()
+                if kind == Invoice.QUOTE:
+                    invoice.valid_until = date.today() + timedelta(days=issuer.quote_validity_days)
+                else:
+                    invoice.service_date = date.today()
                 db.session.flush()
                 log(
                     "invoice.create",
-                    f"Brouillon de facture pour {invoice.recipient_name}",
+                    f"Brouillon de {Invoice.KINDS[kind].lower()} pour {invoice.recipient_name}",
                     invoice=invoice,
                     customer=customer,
                 )
                 db.session.commit()
-                return redirect(url_for(".edit", invoice_id=invoice.id))
-    return render_template("invoices/new.html", form=form, dest=dest)
+                return redirect(url_for("invoices.edit", invoice_id=invoice.id))
+    return render_template("invoices/new.html", form=form, dest=dest, kind=kind)
 
 
 @bp.route("/<int:invoice_id>/modifier", methods=["GET", "POST"])
@@ -475,6 +518,7 @@ def edit(invoice_id):
     if request.method == "GET":
         form.recipient_mode.data = ONE_OFF if invoice.is_one_off else CLIENT
         form.customer_id.data = invoice.customer_id or 0
+        form.series_id.data = invoice.series_id or 0
     rows = _rows_of(invoice)
     errors = []
     if form.validate_on_submit():
@@ -490,6 +534,11 @@ def edit(invoice_id):
             try:
                 if issuer.id != invoice.issuer_id:
                     billing.change_issuer(invoice, issuer)
+                elif invoice.kind == Invoice.INVOICE and form.series_id.data:
+                    chosen = db.session.get(NumberSeries, form.series_id.data)
+                    if chosen is None:
+                        abort(400)
+                    billing.set_series(invoice, chosen)
                 if not invoice.is_credit:
                     if customer is not None:
                         billing.set_customer(invoice, customer)
@@ -499,7 +548,9 @@ def edit(invoice_id):
                     setattr(invoice, name, (getattr(form, name).data or "").strip() or None)
                 invoice.service_date = form.service_date.data
                 invoice.service_end = form.service_end.data
-                invoice.due_date = None if invoice.is_credit else form.due_date.data
+                invoice.due_date = form.due_date.data if invoice.kind == Invoice.INVOICE else None
+                if invoice.is_quote:
+                    invoice.valid_until = form.valid_until.data
                 billing.set_lines(invoice, inputs)
             except billing.BillingError as exc:
                 errors.append(str(exc))
@@ -548,11 +599,12 @@ def delete(invoice_id):
     invoice = _draft(invoice_id)
     customer = invoice.customer
     label = f"{invoice.kind_label} en brouillon pour {invoice.recipient_name}"
+    back = url_for("quotes.index" if invoice.is_quote else ".index")
     billing.delete_draft(invoice)
     log("invoice.delete", f"{label} supprimé(e)", customer=customer)
     db.session.commit()
     flash("Brouillon supprimé.", "success")
-    return redirect(url_for(".index"))
+    return redirect(back)
 
 
 @bp.route("/<int:invoice_id>/dupliquer", methods=["POST"])
@@ -564,7 +616,10 @@ def duplicate(invoice_id):
     except billing.BillingError as exc:
         flash(str(exc), "error")
         return redirect(url_for(".detail", invoice_id=source.id))
-    copy.service_date = date.today()
+    if copy.is_quote:
+        copy.valid_until = date.today() + timedelta(days=copy.issuer.quote_validity_days)
+    else:
+        copy.service_date = date.today()
     db.session.flush()
     log("invoice.create", f"Brouillon copié de {source.display_number}", invoice=copy, customer=copy.customer)
     db.session.commit()
@@ -589,7 +644,7 @@ def detail(invoice_id):
     ).all()
     issue_form = IssueForm()
     payment_form = PaymentForm(formdata=None)
-    if not invoice.is_draft and not invoice.is_credit:
+    if not invoice.is_draft and invoice.kind == Invoice.INVOICE:
         payment_form.amount.data = money.amount_input(invoice.balance_cents)
     return render_template(
         "invoices/detail.html",
@@ -601,7 +656,7 @@ def detail(invoice_id):
         history=history,
         issue_form=issue_form,
         payment_form=payment_form,
-        creditable=billing.creditable_cents(invoice) if not invoice.is_draft and not invoice.is_credit else 0,
+        creditable=billing.creditable_cents(invoice) if not invoice.is_draft and invoice.kind == Invoice.INVOICE else 0,
         money=money,
     )
 
@@ -662,7 +717,7 @@ def send(invoice_id):
     if invoice.is_draft:
         flash("Émettez la pièce avant de l'envoyer.", "error")
         return redirect(url_for(".detail", invoice_id=invoice.id))
-    reminder = request.args.get("relance") == "1" and invoice.balance_cents > 0
+    reminder = request.args.get("relance") == "1" and invoice.balance_cents > 0 and not invoice.is_quote
     form = SendForm()
     if request.method == "GET":
         form.to.data = invoice.recipient.get("email") or ""

@@ -15,6 +15,7 @@
 {% endif %}
 {% if can(current_user, "invoice.edit") and not no_issuer %}
 <p class="actions"><a href="{{ url_for('invoices.create') }}" role="button">{{ icon("plus", 18) }} Nouvelle facture</a>
+  <a href="{{ url_for('quotes.create') }}" role="button" class="secondary outline">Nouveau devis</a>
   <a href="{{ url_for('customers.create', facturer=1) }}" role="button" class="secondary outline">Nouveau client</a></p>
 {% endif %}
 
@@ -60,6 +61,18 @@
       {% endfor %}
     </ul>
     {% else %}<p class="empty">Aucun brouillon en attente.</p>{% endif %}
+  </section>
+  <section class="card">
+    <h2>{{ icon("clipboard", 18) }} Devis en attente <span class="count">{{ pending_quotes | length }}</span></h2>
+    {% if pending_quotes %}
+    <ul class="plain-list">
+      {% for q in pending_quotes %}
+      <li><a href="{{ url_for('invoices.detail', invoice_id=q.id) }}">{{ q.number }}</a> · {{ q.recipient_name }}
+        <br><small class="muted">{{ q.total_ttc_cents | money }}{% if q.valid_until %} · valable jusqu'au {{ q.valid_until | date_fr }}{% endif %}</small></li>
+      {% endfor %}
+    </ul>
+    <p class="small"><a href="{{ url_for('quotes.index', etat='en_attente') }}">Tous les devis en attente</a></p>
+    {% else %}<p class="empty">Aucun devis en attente de réponse.</p>{% endif %}
   </section>
 </div>
 {% endif %}

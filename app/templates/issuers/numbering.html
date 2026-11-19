@@ -1,0 +1,56 @@
+{% extends "base.html" %}
+{% from "partials/_form.html" import field %}
+{% block title %}Numérotation · {{ issuer.name }}{% endblock %}
+{% block content %}
+<p><a href="{{ url_for('issuers.detail', issuer_id=issuer.id) }}">← {{ issuer.name }}</a></p>
+<div class="page-head">
+  <div>
+    <h1>Numérotation</h1>
+    <p class="muted">{{ issuer.name }} · les pièces déjà émises gardent leur numéro.</p>
+  </div>
+</div>
+
+<section class="card">
+  <div class="page-head">
+    <div>
+      <h2>Séries de factures</h2>
+      <p class="muted small">Chaque série a ses propres numéros, continus et sans trou : par exemple une pour les factures courantes, une pour les comités d'entreprise. On la choisit sur la facture ; un avoir prend la série de sa facture.</p>
+    </div>
+    <div class="actions"><a href="{{ url_for('issuers.series', issuer_id=issuer.id) }}" role="button" class="secondary">Ajouter une série</a></div>
+  </div>
+  <div class="overflow-auto"><table class="striped responsive">
+    <thead><tr><th>Série</th><th>Factures</th><th>Avoirs</th><th></th></tr></thead>
+    <tbody>
+    {% for row in rows.series %}{% set s = row.series %}
+    <tr{% if s.archived %} class="muted"{% endif %}>
+      <td data-label="Série"><span><strong>{{ s.name }}</strong>{% if s.is_default %} <span class="badge">par défaut</span>{% endif %}{% if s.archived %} <span class="badge">archivée</span>{% endif %}<br><small class="muted">code <code>{{ s.code }}</code></small></span></td>
+      <td data-label="Factures"><span>prochaine <code>{{ row.invoice.sample }}</code><br><small class="muted"><code>{{ row.invoice.format }}</code> · remis à 1 {{ row.invoice.reset }}</small></span></td>
+      <td data-label="Avoirs"><span>prochain <code>{{ row.credit.sample }}</code><br><small class="muted"><code>{{ row.credit.format }}</code></small></span></td>
+      <td data-label="">
+        <div class="actions">
+          <a href="{{ url_for('issuers.series', issuer_id=issuer.id, series_id=s.id) }}">Modifier</a>
+          {% if not s.is_default %}
+          <form method="post" action="{{ url_for('issuers.archive_series', issuer_id=issuer.id, series_id=s.id) }}">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+            <button type="submit" class="link-button">{{ "Rétablir" if s.archived else "Archiver" }}</button>
+          </form>
+          {% endif %}
+        </div>
+      </td>
+    </tr>
+    {% endfor %}
+    </tbody>
+  </table></div>
+  {% if issued %}<p class="small"><strong>Des pièces sont déjà émises.</strong> Dans une série, les numéros des factures doivent se suivre sans trou : évitez de changer de format en cours d'année.</p>{% endif %}
+</section>
+
+<form method="post" novalidate class="card">
+  {{ form.hidden_tag() }}
+  <h2>Devis</h2>
+  <p class="muted small">Une seule série de devis par émetteur. La facture tirée d'un devis va dans la série par défaut (modifiable sur le brouillon).</p>
+  {% with fname="quote_format", example=example, placeholder="DE-{AAAA}-{NNNN}" %}{% include "issuers/_format_pair.html" %}{% endwith %}
+  <div class="actions"><button type="submit">Enregistrer</button></div>
+</form>
+
+{% include "issuers/_format_help.html" %}
+{% endblock %}

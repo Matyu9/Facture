@@ -342,7 +342,11 @@ def test_issuer_logo_is_kept_sharp_enough_to_print(client, admin, issuer):
     image = io.BytesIO()
     Image.new("RGB", (2400, 800), (10, 10, 10)).save(image, "PNG")
     image.seek(0)
-    client.post(f"/emetteurs/{issuer.id}/logo", data={"logo": (image, "logo.png")}, content_type="multipart/form-data")
+    client.post(
+        f"/emetteurs/{issuer.id}/mise-en-page",
+        data={**LAYOUT, "logo": (image, "logo.png")},
+        content_type="multipart/form-data",
+    )
     issuer = db.session.get(Issuer, issuer.id)
     with Image.open(Path(client.application.config["UPLOAD_DIR"]) / issuer.logo) as saved:
         assert saved.size == (1200, 400)
