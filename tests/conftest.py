@@ -287,8 +287,9 @@ def vat_issuer(app):
         vat_regime=Issuer.SUBJECT,
         vat_number="FR12345678901",
         default_vat_rate=Decimal("20"),
-        invoice_prefix="OR-",
-        credit_prefix="OR-AV-",
+        invoice_format="OR-{AAAA}-{NNNN}",
+        credit_format="OR-AV-{AAAA}-{NNNN}",
+        quote_format="OR-DE-{AAAA}-{NNNN}",
     )
     db.session.add(issuer)
     db.session.commit()

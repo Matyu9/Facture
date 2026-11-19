@@ -1,7 +1,7 @@
 """Émetteurs : l'association, ou chacune de ses régies, avec ses mentions légales, sa TVA et sa numérotation."""
 
 import re
-from datetime import datetime
+from datetime import date, datetime
 from decimal import Decimal
 
 from flask import (
@@ -24,7 +24,7 @@ from wtforms.validators import DataRequired, Length, NumberRange, Optional, Rege
 from ..extensions import db, fold
 from ..models import Invoice, Issuer
 from ..permissions import can, require
-from ..services import billing, branding, invoice_mail, pdf, photos
+from ..services import billing, branding, invoice_mail, numbering, pdf, photos
 from ..services.activity import diff, log
 from ..services.photos import InvalidImage
 
@@ -100,27 +100,11 @@ class IssuerForm(FlaskForm):
         filters=[_strip],
         description="Laissée vide : la mention du régime choisi.",
     )
-    invoice_prefix = StringField(
-        "Préfixe des factures",
-        validators=[DataRequired(), Length(max=20), Regexp(r"^[A-Za-z0-9_-]*$", message="Lettres, chiffres, - et _.")],
-        default="FA-",
-    )
-    credit_prefix = StringField(
-        "Préfixe des avoirs",
-        validators=[DataRequired(), Length(max=20), Regexp(r"^[A-Za-z0-9_-]*$", message="Lettres, chiffres, - et _.")],
-        default="AV-",
-    )
-    quote_prefix = StringField(
-        "Préfixe des devis",
-        validators=[DataRequired(), Length(max=20), Regexp(r"^[A-Za-z0-9_-]*$", message="Lettres, chiffres, - et _.")],
-        default="DE-",
-    )
     quote_validity_days = IntegerField(
         "Validité des devis (jours)",
         validators=[NumberRange(min=1, max=365, message="Entre 1 et 365 jours.")],
         default=30,
     )
-    number_digits = IntegerField("Chiffres du numéro", validators=[NumberRange(min=3, max=8)], default=4)
     payment_terms_days = IntegerField(
         "Délai de paiement (jours)",
         validators=[NumberRange(min=0, max=60, message="Entre 0 et 60 jours (délai légal maximal).")],
@@ -171,12 +155,6 @@ class IssuerForm(FlaskForm):
         if self.vat_regime.data == Issuer.SUBJECT and not self.vat_number.data:
             self.vat_number.errors = [*self.vat_number.errors, "Obligatoire pour un émetteur assujetti à la TVA."]
             ok = False
-        # Chaque série a son préfixe : sinon la facture et le devis n° 1 porteraient le même numéro.
-        prefixes = [self.invoice_prefix, self.credit_prefix, self.quote_prefix]
-        for i, field in enumerate(prefixes):
-            if any(field.data == other.data for other in prefixes[:i]):
-                field.errors = [*field.errors, "Ce préfixe est déjà pris par une autre série de cet émetteur."]
-                ok = False
         return ok
 
     def _has_issued(self):
@@ -185,6 +163,64 @@ class IssuerForm(FlaskForm):
                 db.select(Invoice.id).where(Invoice.issuer_id == self._current.id, Invoice.status == Invoice.ISSUED)
             )
         )
+
+
+KINDS = (Invoice.INVOICE, Invoice.CREDIT, Invoice.QUOTE)
+FORMAT_FIELDS = {Invoice.INVOICE: "invoice_format", Invoice.CREDIT: "credit_format", Invoice.QUOTE: "quote_format"}
+SERIES_LABELS = {Invoice.INVOICE: "Factures", Invoice.CREDIT: "Avoirs", Invoice.QUOTE: "Devis"}
+
+
+def _format_field(label):
+    return StringField(label, validators=[DataRequired()], filters=[_strip], render_kw={"spellcheck": "false"})
+
+
+def _next_field():
+    return IntegerField(
+        "Prochain numéro", validators=[NumberRange(min=1, max=9_999_999, message="Un nombre entre 1 et 9 999 999.")]
+    )
+
+
+class NumberingForm(FlaskForm):
+    invoice_format = _format_field("Format des factures")
+    invoice_next = _next_field()
+    credit_format = _format_field("Format des avoirs")
+    credit_next = _next_field()
+    quote_format = _format_field("Format des devis")
+    quote_next = _next_field()
+
+    def __init__(self, *args, current=None, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._current = current
+
+    def validate(self, extra_validators=None):
+        ok = super().validate(extra_validators)
+        parsed = {}
+        for name in FORMAT_FIELDS.values():
+            field = getattr(self, name)
+            if field.errors:
+                continue
+            try:
+                numbering.example(field.data)
+                parsed[name] = numbering.parse(field.data)
+            except numbering.FormatError as exc:
+                field.errors = [*field.errors, str(exc)]
+                ok = False
+        # Les numéros sont uniques dans toute l'appli : deux séries ne doivent pas pouvoir produire le même.
+        taken = {}
+        for other in billing.issuers(include_archived=True):
+            if other is self._current:
+                continue
+            for kind in KINDS:
+                taken.setdefault(numbering.of(other, kind).signature, f"{SERIES_LABELS[kind].lower()} de {other.name}")
+        seen = {}
+        for name, fmt in parsed.items():
+            field = getattr(self, name)
+            clash = seen.get(fmt.signature) or taken.get(fmt.signature)
+            if clash:
+                field.errors = [*field.errors, f"Même forme que les {clash} : les numéros se mélangeraient."]
+                ok = False
+            seen.setdefault(fmt.signature, field.label.text.removeprefix("Format des ").lower())
+        return ok
 
 
 class LayoutForm(FlaskForm):
@@ -276,6 +312,7 @@ def create():
     form = IssuerForm()
     if form.validate_on_submit():
         issuer = Issuer(**_values(form))
+        _unique_default_formats(issuer)
         db.session.add(issuer)
         db.session.flush()
         log("issuer.create", f"Émetteur créé : {issuer.name} ({issuer.regime_label})")
@@ -295,7 +332,7 @@ def detail(issuer_id):
         manage=can(current_user, "issuer.manage"),
         count=_counts().get(issuer.id, 0),
         default_penalty=billing.DEFAULT_LATE_PENALTY,
-        sample=f"{issuer.invoice_prefix}{datetime.now().year}-{1:0{issuer.number_digits}d}",
+        series=_series(issuer),
         layouts=Issuer.LAYOUTS,
         logo_sizes=Issuer.LOGO_SIZES,
         logo_positions=Issuer.LOGO_POSITIONS,
@@ -410,6 +447,133 @@ def preview(issuer_id):
             "Cache-Control": "private, no-store",
         },
     )
+
+
+def _series(issuer):
+    """Une ligne par série : format, prochain numéro, remise à zéro."""
+    today = date.today()
+    rows = []
+    for kind in KINDS:
+        fmt = numbering.of(issuer, kind)
+        nxt = billing.next_number(issuer, kind, today)
+        rows.append(
+            {
+                "kind": kind,
+                "field": FORMAT_FIELDS[kind],
+                "label": SERIES_LABELS[kind],
+                "format": fmt.text,
+                "next": nxt,
+                "sample": fmt.render(today, nxt),
+                "reset": numbering.RESETS[fmt.reset],
+            }
+        )
+    return rows
+
+
+def _unique_default_formats(issuer):
+    """Un nouvel émetteur reçoit FA-…, AV-…, DE-… ; si un autre les a déjà, ses numéros commencent par son code."""
+    taken = {
+        numbering.of(other, kind).signature
+        for other in billing.issuers(include_archived=True)
+        if other is not issuer
+        for kind in KINDS
+    }
+    for kind, name in FORMAT_FIELDS.items():
+        fmt = numbering.parse(numbering.default(kind))
+        if fmt.signature in taken:
+            setattr(issuer, name, f"{issuer.code.upper()[:20]}-{fmt.text}")
+        else:
+            setattr(issuer, name, fmt.text)
+
+
+@bp.route("/<int:issuer_id>/numerotation", methods=["GET", "POST"])
+@require("issuer.manage")
+def numbers(issuer_id):
+    issuer = db.session.get(Issuer, issuer_id) or abort(404)
+    today = date.today()
+    before = {kind: billing.next_number(issuer, kind, today) for kind in KINDS}
+    form = NumberingForm(obj=issuer, current=issuer)
+    if request.method == "GET":
+        for kind, name in FORMAT_FIELDS.items():
+            getattr(form, name).data = numbering.of(issuer, kind).text
+            getattr(form, name.replace("_format", "_next")).data = before[kind]
+    if form.validate_on_submit():
+        changes = {}
+        for name in FORMAT_FIELDS.values():
+            new = getattr(form, name).data
+            if new != getattr(issuer, name):
+                changes[name] = [getattr(issuer, name), new]
+                setattr(issuer, name, new)
+        failed = False
+        for kind, name in FORMAT_FIELDS.items():
+            field = getattr(form, name.replace("_format", "_next"))
+            # Le numéro saisi vaut pour la série du nouveau format : l'exemple affiché est celui qui sortira.
+            if field.data == billing.next_number(issuer, kind, today):
+                continue
+            try:
+                billing.set_next_number(issuer, kind, field.data, today)
+            except billing.BillingError as exc:
+                lowest = billing.lowest_next_number(issuer, kind, today)
+                field.errors = [*field.errors, f"{exc} Au moins {lowest}."]
+                failed = True
+            else:
+                changes[name.replace("_format", "_next")] = [before[kind], field.data]
+        if failed:
+            db.session.rollback()
+        else:
+            if changes:
+                log("issuer.numbering", f"Numérotation modifiée : {issuer.name}", changes=changes)
+            db.session.commit()
+            flash("Numérotation enregistrée. Les pièces déjà émises gardent leur numéro.", "success")
+            return redirect(url_for(".detail", issuer_id=issuer.id))
+    return render_template(
+        "issuers/numbering.html",
+        issuer=issuer,
+        form=form,
+        series=_series(issuer),
+        help=numbering.HELP,
+        examples=_examples(form, today),
+        issued=bool(
+            db.session.scalar(
+                db.select(Invoice.id).where(Invoice.issuer_id == issuer.id, Invoice.status == Invoice.ISSUED)
+            )
+        ),
+    )
+
+
+def _example(text, n, day=None):
+    """(exemple, remise à zéro, erreur) pour un format saisi."""
+    day = day or date.today()
+    try:
+        fmt = numbering.parse(text)
+        numbering.example(text)
+    except numbering.FormatError as exc:
+        return None, None, str(exc)
+    return fmt.render(day, max(n or 1, 1)), numbering.RESETS[fmt.reset], None
+
+
+def _examples(form, day):
+    out = {}
+    for name in FORMAT_FIELDS.values():
+        n = getattr(form, name.replace("_format", "_next")).data
+        out[name] = _example(getattr(form, name).data or "", n if isinstance(n, int) else 1, day)
+    return out
+
+
+@bp.route("/<int:issuer_id>/numerotation/exemple")
+@require("issuer.manage")
+def number_example(issuer_id):
+    """Exemple mis à jour pendant la saisie (htmx)."""
+    issuer = db.session.get(Issuer, issuer_id) or abort(404)
+    name = request.args.get("serie", "")
+    if name not in FORMAT_FIELDS.values():
+        abort(400)
+    n = request.args.get(name.replace("_format", "_next"), type=int)
+    if n is None:
+        kind = {v: k for k, v in FORMAT_FIELDS.items()}[name]
+        n = billing.next_number(issuer, kind)
+    sample, reset, error = _example(request.args.get(name, ""), n)
+    return render_template("issuers/_number_example.html", sample=sample, reset=reset, error=error)
 
 
 @bp.route("/logo/<name>")

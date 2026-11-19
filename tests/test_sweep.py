@@ -96,7 +96,7 @@ ACCESS = {
     "products.index": VIEW,
     **{f"products.{name}": EDIT for name in ("create", "edit", "archive")},
     **{f"issuers.{name}": VIEW for name in ("index", "detail", "logo_file", "preview")},
-    **{f"issuers.{name}": ISSUER for name in ("create", "edit", "archive", "layout")},
+    **{f"issuers.{name}": ISSUER for name in ("create", "edit", "archive", "layout", "numbers", "number_example")},
     **{
         f"api.{name}": API
         for name in (

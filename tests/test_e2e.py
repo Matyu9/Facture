@@ -50,6 +50,7 @@ PAGES = [
     "/emetteurs/nouveau",
     "/emetteurs/1",
     "/emetteurs/1/mise-en-page",
+    "/emetteurs/1/numerotation",
     "/parametres/api",
     "/roles",
     "/roles/nouveau",

@@ -18,7 +18,7 @@ from fpdf import FPDF
 from PIL import Image
 
 from ..models import Customer, Invoice, InvoiceLine, Issuer
-from . import billing, branding, money
+from . import billing, branding, money, numbering
 
 FONT_DIR = Path(__file__).resolve().parent.parent / "fonts"
 FONT = "DejaVu"
@@ -581,7 +581,7 @@ def preview(issuer, overrides=None):
     invoice = Invoice(
         kind=Invoice.INVOICE,
         status=Invoice.DRAFT,
-        number=f"{issuer.invoice_prefix}{today.year}-{1:0{issuer.number_digits}d}",
+        number=numbering.of(issuer, Invoice.INVOICE).render(today, 1),
         issue_date=today,
         due_date=today + timedelta(days=issuer.payment_terms_days),
         service_date=today,

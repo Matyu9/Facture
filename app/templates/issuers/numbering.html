@@ -1,0 +1,47 @@
+{% extends "base.html" %}
+{% from "partials/_form.html" import field %}
+{% block title %}Numérotation · {{ issuer.name }}{% endblock %}
+{% block content %}
+<p><a href="{{ url_for('issuers.detail', issuer_id=issuer.id) }}">← {{ issuer.name }}</a></p>
+<div class="page-head">
+  <div>
+    <h1>Numérotation</h1>
+    <p class="muted">{{ issuer.name }} · factures, avoirs et devis ont chacun leur série. Les pièces déjà émises gardent leur numéro.</p>
+  </div>
+</div>
+
+<section class="card">
+  <h2>Composer un format</h2>
+  <p class="muted small">Du texte fixe (lettres sans accent, chiffres, <code>-</code> <code>_</code> <code>.</code> <code>/</code>) et des balises entre accolades :</p>
+  <dl class="props">
+    {% for key, label in help.items() %}<dt><code>{{ key }}</code></dt><dd>{{ label }}</dd>{% endfor %}
+  </dl>
+  <p class="muted small">Le compteur repart à 1 chaque mois si le format contient l'année et le mois, chaque année s'il contient l'année, jamais sinon.
+    Exemples : <code>FA-{AAAA}-{NNNN}</code> → FA-2026-0001 · <code>F{AA}{MM}-{NNN}</code> → F2611-001 · <code>FACT-{NNNNNN}</code> → FACT-000001 · <code>{AAAA}-{L}</code> → 2026-A.</p>
+  {% if issued %}<p class="small"><strong>Des pièces sont déjà émises.</strong> Les numéros des factures doivent se suivre sans trou : évitez de changer de format en cours d'année.</p>{% endif %}
+</section>
+
+<form method="post" novalidate>
+  {{ form.hidden_tag() }}
+  {% for row in series %}
+  {% set fname = row.field %}
+  {% set nname = fname | replace("_format", "_next") %}
+  {% set f = form[fname] %}{% set n = form[nname] %}
+  {% set sample, reset, error = examples[fname] %}
+  <section class="card">
+    <h2>{{ row.label }}</h2>
+    {#- Exemple recalculé pendant la saisie : l'événement « input » des deux champs remonte jusqu'ici. -#}
+    <div class="grid" hx-get="{{ url_for('issuers.number_example', issuer_id=issuer.id, serie=fname) }}" hx-trigger="input delay:300ms" hx-target="#{{ fname }}-example" hx-include="#{{ f.id }}, #{{ n.id }}">
+      <div>{{ field(f) }}</div>
+      <div>{{ field(n) }}</div>
+    </div>
+    <div id="{{ fname }}-example">{% include "issuers/_number_example.html" %}</div>
+    <small class="muted">Prochain numéro : pour reprendre une série commencée dans un autre outil. Vaut pour la période en cours.</small>
+  </section>
+  {% endfor %}
+  <div class="actions">
+    <button type="submit">Enregistrer</button>
+    <a href="{{ url_for('issuers.detail', issuer_id=issuer.id) }}" role="button" class="secondary outline">Annuler</a>
+  </div>
+</form>
+{% endblock %}

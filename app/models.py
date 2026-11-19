@@ -283,12 +283,17 @@ class Issuer(ArchivableMixin, TimestampMixin, db.Model):
     default_vat_rate = db.Column(db.Numeric(5, 2), nullable=False, default=Decimal("20.00"))
     # Mention imprimée sous les totaux (vide : celle du régime).
     vat_mention = db.Column(db.String(255))
-    # Numérotation : <préfixe><année>-<numéro> (FA-2026-0001), reprise à 1 chaque année, séparée pour les avoirs.
-    invoice_prefix = db.Column(db.String(20), nullable=False, default="FA-")
-    credit_prefix = db.Column(db.String(20), nullable=False, default="AV-")
-    quote_prefix = db.Column(db.String(20), nullable=False, default="DE-", server_default="DE-")
+    # Numérotation : un format par série (services/numbering.py), FA-{AAAA}-{NNNN} → FA-2026-0001.
+    invoice_format = db.Column(
+        db.String(40), nullable=False, default="FA-{AAAA}-{NNNN}", server_default="FA-{AAAA}-{NNNN}"
+    )
+    credit_format = db.Column(
+        db.String(40), nullable=False, default="AV-{AAAA}-{NNNN}", server_default="AV-{AAAA}-{NNNN}"
+    )
+    quote_format = db.Column(
+        db.String(40), nullable=False, default="DE-{AAAA}-{NNNN}", server_default="DE-{AAAA}-{NNNN}"
+    )
     quote_validity_days = db.Column(db.Integer, nullable=False, default=30, server_default="30")
-    number_digits = db.Column(db.Integer, nullable=False, default=4)
     payment_terms_days = db.Column(db.Integer, nullable=False, default=30)
     iban = db.Column(db.String(40))
     bic = db.Column(db.String(15))
@@ -325,11 +330,12 @@ class Issuer(ArchivableMixin, TimestampMixin, db.Model):
 
 
 class NumberSequence(db.Model):
-    """Dernier numéro attribué, par émetteur, type de pièce et année. Lu et incrémenté sous verrou : pas de trou."""
+    """Dernier numéro attribué, par émetteur, type de pièce et période. Lu et incrémenté sous verrou : pas de trou."""
 
     issuer_id = db.Column(db.ForeignKey("issuer.id", ondelete="RESTRICT"), primary_key=True)
     kind = db.Column(db.String(10), primary_key=True)  # Invoice.INVOICE, Invoice.CREDIT ou Invoice.QUOTE
-    year = db.Column(db.Integer, primary_key=True)
+    # « 2026 », « 2026-11 » ou « » (jamais remis à zéro), selon le format de la série.
+    period = db.Column(db.String(7), primary_key=True)
     last_number = db.Column(db.Integer, nullable=False, default=0)
 
 

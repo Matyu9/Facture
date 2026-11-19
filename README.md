@@ -12,7 +12,7 @@ Elle complète Adhérents (annuaire, cotisations, comptes) et l'Inventaire (mat�
 
 ## Ce que fait l'appli
 
-- **Émetteurs** : l'association, ou chacune de ses régies. Chacun a sa dénomination, son SIRET, son RNA, son régime de TVA (franchise, exonéré, assujetti), sa mention de TVA, sa numérotation, ses coordonnées bancaires, son email d'envoi, et la mise en page de ses factures (disposition, couleur, logo, textes d'introduction et de conclusion), avec aperçu.
+- **Émetteurs** : l'association, ou chacune de ses régies. Chacun a sa dénomination, son SIRET, son RNA, son régime de TVA (franchise, exonéré, assujetti), sa mention de TVA, sa numérotation (format libre par série : année ou non, mois, compteur en chiffres ou en lettres, numéro de départ), ses coordonnées bancaires, son email d'envoi, et la mise en page de ses factures (disposition, couleur, logo, textes d'introduction et de conclusion), avec aperçu.
 - **Clients** : structures (mairies, comités, entreprises) et particuliers (familles). Un client venu d'Adhérents garde sa référence et est tenu à jour à chaque facture. Une facture peut aussi s'adresser à un destinataire ponctuel, saisi sur la pièce sans créer de fiche (et enregistré plus tard si besoin).
 - **Articles** : les prestations qui reviennent (concert, animation, location…), pour remplir une ligne en un clic.
 - **Devis** : même saisie que les factures, numérotés dans leur propre série, avec une date de validité et un cadre « Bon pour accord » sur le PDF. Envoi par email, réponse du client (accepté, refusé, expiré), puis transformation en facture d'un clic.

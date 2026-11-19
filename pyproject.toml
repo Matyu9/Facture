@@ -1,6 +1,6 @@
 [project]
 name = "facture"
-version = "0.3.0"
+version = "0.4.0"
 description = "Facturation de l'association : factures, avoirs, règlements, PDF archivés et API pour les autres applis."
 readme = "README.md"
 requires-python = ">=3.12"

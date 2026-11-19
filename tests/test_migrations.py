@@ -118,9 +118,9 @@ def test_constraints_of_the_real_schema(migrated):
 
 
 BILLING = (
-    "INSERT INTO issuer (id, code, name, legal_name, vat_regime, default_vat_rate, invoice_prefix, credit_prefix, "
-    "number_digits, payment_terms_days, created_at, updated_at) "
-    "VALUES (1, 'ecole', 'École', 'Association', 'franchise', 20, 'FA-', 'AV-', 4, 30, now(), now())",
+    "INSERT INTO issuer (id, code, name, legal_name, vat_regime, default_vat_rate, "
+    "payment_terms_days, created_at, updated_at) "
+    "VALUES (1, 'ecole', 'École', 'Association', 'franchise', 20, 30, now(), now())",
     "INSERT INTO customer (id, kind, name, created_at, updated_at) VALUES (1, 'structure', 'Mairie', now(), now())",
     "INSERT INTO invoice (id, kind, status, issuer_id, customer_id, number, total_ht_cents, total_vat_cents, "
     "total_ttc_cents, created_at, updated_at) "
@@ -142,9 +142,11 @@ def test_invoice_numbers_are_unique(migrated):
         "INSERT INTO invoice (kind, status, issuer_id, customer_id, number, total_ht_cents, total_vat_cents, "
         "total_ttc_cents, created_at, updated_at) VALUES ('facture', 'emise', 1, 1, 'FA-2026-0001', 0, 0, 0, now(), now())",
     )
-    run_sql(migrated, "INSERT INTO number_sequence (issuer_id, kind, year, last_number) VALUES (1, 'facture', 2026, 1)")
+    run_sql(
+        migrated, "INSERT INTO number_sequence (issuer_id, kind, period, last_number) VALUES (1, 'facture', '2026', 1)"
+    )
     assert_fails(
-        migrated, "INSERT INTO number_sequence (issuer_id, kind, year, last_number) VALUES (1, 'facture', 2026, 2)"
+        migrated, "INSERT INTO number_sequence (issuer_id, kind, period, last_number) VALUES (1, 'facture', '2026', 2)"
     )
 
 
@@ -199,3 +201,40 @@ def test_deleting_an_invoice_removes_its_lines_and_payments(migrated):
         "SELECT invoice_id, customer_id FROM activity WHERE action = 'invoice.issue'",
     )
     assert (lines, payments, activity) == ([(0,)], [(0,)], [(None, 1)])
+
+
+def test_numbering_formats_are_taken_from_the_old_prefixes(migrated):
+    """Préfixe + nombre de chiffres d'avant → format équivalent ; les séries annuelles continuent."""
+    upgrade(MIGRATIONS, revision="f0000003quotes")
+    run_sql(
+        migrated,
+        "INSERT INTO issuer (id, code, name, legal_name, vat_regime, default_vat_rate, invoice_prefix, credit_prefix, "
+        "quote_prefix, number_digits, payment_terms_days, created_at, updated_at) "
+        "VALUES (1, 'ecole', 'École', 'Association', 'franchise', 20, 'EC-', 'EC-AV-', 'EC-DE-', 5, 30, now(), now())",
+        "INSERT INTO number_sequence (issuer_id, kind, year, last_number) VALUES (1, 'facture', 2026, 12)",
+    )
+    upgrade(MIGRATIONS)
+    formats, sequences = run_sql(
+        migrated,
+        "SELECT invoice_format, credit_format, quote_format FROM issuer",
+        "SELECT kind, period, last_number FROM number_sequence",
+    )
+    assert formats == [("EC-{AAAA}-{NNNNN}", "EC-AV-{AAAA}-{NNNNN}", "EC-DE-{AAAA}-{NNNNN}")]
+    assert sequences == [("facture", "2026", 12)]
+    downgrade(MIGRATIONS, revision="f0000003quotes")
+    (prefixes,) = run_sql(migrated, "SELECT invoice_prefix, credit_prefix, quote_prefix FROM issuer")
+    assert prefixes == [("EC-", "EC-AV-", "EC-DE-")]
+
+
+def test_numbering_formats_shared_by_two_issuers_are_told_apart(migrated):
+    upgrade(MIGRATIONS, revision="f0000003quotes")
+    run_sql(
+        migrated,
+        "INSERT INTO issuer (id, code, name, legal_name, vat_regime, default_vat_rate, invoice_prefix, credit_prefix, "
+        "number_digits, payment_terms_days, created_at, updated_at) VALUES "
+        "(1, 'ecole', 'École', 'Association', 'franchise', 20, 'FA-', 'AV-', 4, 30, now(), now()), "
+        "(2, 'orchestre', 'Orchestre', 'Association', 'franchise', 20, 'OR-', 'OR-AV-', 4, 30, now(), now())",
+    )
+    upgrade(MIGRATIONS)
+    (rows,) = run_sql(migrated, "SELECT invoice_format, quote_format FROM issuer ORDER BY id")
+    assert rows == [("FA-{AAAA}-{NNNN}", "DE-{AAAA}-{NNNN}"), ("OR-{AAAA}-{NNNN}", "ORCHESTRE-DE-{AAAA}-{NNNN}")]

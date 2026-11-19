@@ -18,7 +18,7 @@ from decimal import Decimal
 
 from ..extensions import db
 from ..models import RECIPIENT_FIELDS, Customer, Invoice, InvoiceLine, Issuer, NumberSequence, Payment
-from . import archive, money
+from . import archive, money, numbering
 
 # Mention des pénalités de retard, obligatoire entre professionnels (art. L441-10 du code de commerce), imprimée quand
 # l'émetteur n'en a pas saisi une à lui.
@@ -305,20 +305,66 @@ def problems(invoice, issue_date=None):
     return found
 
 
-def _next_number(issuer, kind, year):
+def _next_number(issuer, kind, day):
     """Prend le numéro suivant de la série, sous verrou de ligne : deux émissions simultanées ne l'auront pas toutes
     les deux. La transaction qui échoue ensuite rend le numéro (rien n'est validé) : pas de trou."""
+    fmt = numbering.of(issuer, kind)
+    period = fmt.period(day)
     sequence = db.session.scalar(
         db.select(NumberSequence)
-        .where(NumberSequence.issuer_id == issuer.id, NumberSequence.kind == kind, NumberSequence.year == year)
+        .where(NumberSequence.issuer_id == issuer.id, NumberSequence.kind == kind, NumberSequence.period == period)
         .with_for_update()
     )
     if sequence is None:
-        sequence = NumberSequence(issuer_id=issuer.id, kind=kind, year=year, last_number=0)
+        sequence = NumberSequence(issuer_id=issuer.id, kind=kind, period=period, last_number=0)
         db.session.add(sequence)
     sequence.last_number += 1
-    prefix = {Invoice.CREDIT: issuer.credit_prefix, Invoice.QUOTE: issuer.quote_prefix}.get(kind, issuer.invoice_prefix)
-    return sequence.last_number, f"{prefix}{year}-{sequence.last_number:0{issuer.number_digits}d}"
+    number = fmt.render(day, sequence.last_number)
+    # Un format changé en cours de route peut retomber sur un numéro déjà donné : on refuse plutôt que de doubler.
+    if db.session.scalar(db.select(Invoice.id).where(Invoice.number == number)):
+        raise BillingError(
+            f"Le numéro {number} est déjà pris par une autre pièce. Changez le format de numérotation de "
+            f"l'émetteur ou son prochain numéro."
+        )
+    return sequence.last_number, number
+
+
+def next_number(issuer, kind, day=None):
+    """Prochain compteur de la série en cours (sans le prendre) : pour l'afficher et le régler."""
+    day = day or date.today()
+    sequence = db.session.get(NumberSequence, (issuer.id, kind, numbering.of(issuer, kind).period(day)))
+    return (sequence.last_number if sequence else 0) + 1
+
+
+def lowest_next_number(issuer, kind, day=None):
+    """Plus petit « prochain numéro » acceptable : au-delà de toutes les pièces émises dans la période en cours."""
+    day = day or date.today()
+    fmt = numbering.of(issuer, kind)
+    query = db.select(db.func.max(Invoice.sequence_number)).where(
+        Invoice.issuer_id == issuer.id, Invoice.kind == kind, Invoice.status == Invoice.ISSUED
+    )
+    if fmt.reset != numbering.NEVER:
+        query = query.where(db.extract("year", Invoice.issue_date) == day.year)
+    if fmt.reset == numbering.MONTHLY:
+        query = query.where(db.extract("month", Invoice.issue_date) == day.month)
+    return (db.session.scalar(query) or 0) + 1
+
+
+def set_next_number(issuer, kind, value, day=None):
+    """Règle le compteur de la série en cours (reprise d'une numérotation commencée ailleurs)."""
+    day = day or date.today()
+    if value < lowest_next_number(issuer, kind, day):
+        raise BillingError("Ce numéro a déjà été donné dans la période en cours.")
+    period = numbering.of(issuer, kind).period(day)
+    sequence = db.session.scalar(
+        db.select(NumberSequence)
+        .where(NumberSequence.issuer_id == issuer.id, NumberSequence.kind == kind, NumberSequence.period == period)
+        .with_for_update()
+    )
+    if sequence is None:
+        sequence = NumberSequence(issuer_id=issuer.id, kind=kind, period=period, last_number=0)
+        db.session.add(sequence)
+    sequence.last_number = value - 1
 
 
 def issue(invoice, by=None, issue_date=None):
@@ -332,7 +378,7 @@ def issue(invoice, by=None, issue_date=None):
         raise BillingError(" ".join(found))
     issuer = invoice.issuer
     invoice.sequence_year = issue_date.year
-    invoice.sequence_number, invoice.number = _next_number(issuer, invoice.kind, issue_date.year)
+    invoice.sequence_number, invoice.number = _next_number(issuer, invoice.kind, issue_date)
     invoice.issue_date = issue_date
     if invoice.is_quote:
         invoice.due_date = None

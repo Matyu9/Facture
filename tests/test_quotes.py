@@ -150,13 +150,6 @@ def test_quotes_stay_out_of_the_sales_journal_and_totals(client, manager, issuer
     assert "999,00" not in client.get("/").get_data(as_text=True).split("Devis en attente")[0]
 
 
-def test_issuer_prefixes_must_differ(client, admin, issuer):
-    from .test_invoices_web import ISSUER_FORM
-
-    response = client.post(f"/emetteurs/{issuer.id}/modifier", data={**ISSUER_FORM, "quote_prefix": "FA-"})
-    assert response.status_code == 200 and "déjà pris" in response.get_data(as_text=True)
-
-
 # ---------------------------------------------------------------------------
 # Écrans
 # ---------------------------------------------------------------------------

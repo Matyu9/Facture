@@ -35,9 +35,6 @@ ISSUER_FORM = {
     "country": "France",
     "siret": "123 456 789 00012",
     "vat_regime": "franchise",
-    "invoice_prefix": "FA-",
-    "credit_prefix": "AV-",
-    "number_digits": "4",
     "payment_terms_days": "30",
     "iban": "FR76 3000 6000 0112 3456 7890 189",
 }
