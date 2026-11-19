@@ -10,7 +10,7 @@ from .errors import register_error_handlers
 from .extensions import csrf, db, login_manager, migrate
 from .services import branding
 
-__version__ = "0.2.0"
+__version__ = "0.3.0"
 
 # Aucun script ni style en ligne : les comportements passent par app.js (data-confirm, data-autosubmit…).
 CSP = (
@@ -76,6 +76,7 @@ def create_app(config_class=Config):
     from .blueprints.journal import bp as journal_bp
     from .blueprints.notifications import bp as notifications_bp
     from .blueprints.products import bp as products_bp
+    from .blueprints.quotes import bp as quotes_bp
     from .blueprints.roles import bp as roles_bp
     from .blueprints.settings import bp as settings_bp
     from .cli import register_cli
@@ -88,6 +89,7 @@ def create_app(config_class=Config):
         auth_bp,
         dashboard_bp,
         invoices_bp,
+        quotes_bp,
         customers_bp,
         products_bp,
         issuers_bp,

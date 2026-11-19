@@ -221,7 +221,7 @@ def render(invoice, issuer=None, customer=None, watermark="BROUILLON"):
     box_x, box_w = pdf.w - pdf.r_margin - 88, 88
     pdf.set_xy(box_x + 4, y + 3)
     pdf.font(7.5, "B" if style.layout != "sobre" else "", style.accent if style.layout != "sobre" else MUTED)
-    label = style.recipient_label if not invoice.is_credit else "Client"
+    label = style.recipient_label if invoice.kind == Invoice.INVOICE else "Client"
     pdf.cell(box_w - 8, 4, label.upper(), new_x="LEFT", new_y="NEXT")
     pdf.font(10.5, "B")
     pdf.multi_cell(box_w - 8, 5, customer.get("name") or "", new_x="LEFT", new_y="NEXT")
@@ -251,6 +251,8 @@ def render(invoice, issuer=None, customer=None, watermark="BROUILLON"):
             info.append(("Date de la prestation", long_date(invoice.service_date)))
     if invoice.customer_reference:
         info.append(("Votre référence", invoice.customer_reference))
+    if invoice.quote is not None and invoice.quote.number:
+        info.append(("Selon devis", f"{invoice.quote.number} du {long_date(invoice.quote.issue_date)}"))
     if invoice.is_credit and invoice.credited_invoice is not None:
         original = invoice.credited_invoice
         info.append(("Facture corrigée", f"{original.number} du {long_date(original.issue_date)}"))
@@ -311,7 +313,9 @@ def _facts(pdf, invoice, x, y, title_color, *, with_title=True, color=MUTED):
     pdf.font(8.5, color=color)
     if invoice.issue_date:
         pdf.cell(80, 4.5, f"Date : {long_date(invoice.issue_date)}", align="R", new_x="LEFT", new_y="NEXT")
-    if invoice.due_date and not invoice.is_credit:
+    if invoice.is_quote and invoice.valid_until:
+        pdf.cell(80, 4.5, f"Valable jusqu'au : {long_date(invoice.valid_until)}", align="R", new_x="LEFT", new_y="NEXT")
+    elif invoice.due_date and not invoice.is_credit:
         pdf.cell(80, 4.5, f"Échéance : {long_date(invoice.due_date)}", align="R", new_x="LEFT", new_y="NEXT")
     return pdf.get_y()
 
@@ -501,6 +505,9 @@ def _block(pdf, width, title, text):
 
 def _closing(pdf, invoice, issuer, customer, width):
     _block(pdf, width, "Remarques", invoice.notes)
+    if invoice.is_quote:
+        _acceptance(pdf, invoice, width)
+        return
     if not invoice.is_credit:
         payment = []
         if invoice.due_date:
@@ -517,6 +524,25 @@ def _closing(pdf, invoice, issuer, customer, width):
         _block(pdf, width, "Règlement", "\n".join(payment))
         if customer.get("kind") == Customer.ORGANISATION:
             _block(pdf, width, "Retard de paiement", issuer.get("late_penalty") or billing.DEFAULT_LATE_PENALTY)
+
+
+def _acceptance(pdf, quote, width):
+    """Devis : validité, et cadre « Bon pour accord » à dater et signer par le client."""
+    text = []
+    if quote.valid_until:
+        text.append(f"Devis valable jusqu'au {long_date(quote.valid_until)}.")
+    text.append("Pour l'accepter, retournez-le daté et signé, avec la mention « Bon pour accord ».")
+    _block(pdf, width, "Acceptation", "\n".join(text))
+    if pdf.get_y() + 34 > pdf.page_break_trigger:
+        pdf.add_page()
+    box_w = 88
+    x, y = pdf.l_margin + width - box_w, pdf.get_y()
+    pdf.set_draw_color(*LINE)
+    pdf.rect(x, y, box_w, 30, round_corners=True, corner_radius=1.5)
+    pdf.set_xy(x + 4, y + 3)
+    pdf.font(7.5, color=MUTED)
+    pdf.multi_cell(box_w - 8, 4, "DATE, SIGNATURE ET MENTION « BON POUR ACCORD »", new_x="LMARGIN", new_y="NEXT")
+    pdf.set_y(y + 34)
 
 
 def _watermark(pdf, text):

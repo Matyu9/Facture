@@ -34,6 +34,7 @@
     <dl class="props">
       <dt>Prochaine facture</dt><dd><code>{{ sample }}</code> (si c'est la première de l'année)</dd>
       <dt>Avoirs</dt><dd><code>{{ issuer.credit_prefix }}AAAA-…</code></dd>
+      <dt>Devis</dt><dd><code>{{ issuer.quote_prefix }}AAAA-…</code>, valables {{ issuer.quote_validity_days }} jour(s)</dd>
       <dt>Délai</dt><dd>{{ issuer.payment_terms_days }} jour(s)</dd>
       <dt>IBAN</dt><dd>{{ issuer.iban or "—" }}{% if issuer.bic %} · {{ issuer.bic }}{% endif %}</dd>
       <dt>Modalités</dt><dd>{{ issuer.payment_instructions or "—" }}</dd>

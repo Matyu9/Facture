@@ -19,7 +19,11 @@ def _year_summary(year):
     """Par émetteur : facturé, avoirs, encaissé et reste dû sur les pièces émises cette année."""
     rows = {}
     issued = db.session.scalars(
-        db.select(Invoice).where(Invoice.status == Invoice.ISSUED, db.extract("year", Invoice.issue_date) == year)
+        db.select(Invoice).where(
+            Invoice.status == Invoice.ISSUED,
+            Invoice.kind.in_(Invoice.BILLING_KINDS),
+            db.extract("year", Invoice.issue_date) == year,
+        )
     ).all()
     for invoice in issued:
         row = rows.setdefault(
@@ -56,6 +60,15 @@ def index():
                 db.select(Invoice).where(Invoice.status == Invoice.DRAFT).order_by(Invoice.updated_at.desc()).limit(10)
             ).all(),
             overdue=reminders.overdue()[:15],
+            pending_quotes=[
+                q
+                for q in db.session.scalars(
+                    db.select(Invoice)
+                    .where(Invoice.kind == Invoice.QUOTE, Invoice.status == Invoice.ISSUED, Invoice.decision.is_(None))
+                    .order_by(Invoice.issue_date)
+                )
+                if billing.state(q) == billing.PENDING
+            ][:10],
             no_issuer=not billing.issuers(),
         )
     return render_template("dashboard/index.html", **context)

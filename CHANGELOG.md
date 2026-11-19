@@ -1,5 +1,11 @@
 # Journal des versions
 
+## 0.3.0 — 19 novembre 2026
+
+- Devis : brouillon, émission numérotée dans leur propre série (`DE-2026-0001`), PDF avec validité et cadre « Bon pour accord », envoi par email, réponse du client (accepté, refusé, expiré), et transformation en facture d'un clic. Ils restent hors du journal des ventes et des encaissements.
+- API : création de devis, émission et envoi par email d'une pièce existante, réponse du client et facture tirée d'un devis ; destinataire ponctuel ou client déjà enregistré (`customer.id`).
+- Mise en page : le logo s'envoie avec le reste du formulaire. Avant, l'envoyer rechargeait la page et perdait les réglages pas encore enregistrés.
+
 ## 0.2.0 — 19 novembre 2026
 
 - Destinataire ponctuel : une facture peut s'adresser à quelqu'un qui n'est pas dans les clients, saisi directement sur la pièce. On peut l'enregistrer comme client tout de suite, ou plus tard depuis la fiche de la facture.

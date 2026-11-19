@@ -1,6 +1,8 @@
 """Factures et avoirs : calcul, émission, numérotation, règlements.
 
 Règles :
+- un devis suit le même chemin (brouillon, puis émission numérotée dans sa propre série) ; il n'est pas une pièce
+  comptable : ni règlement, ni avoir, ni journal des ventes. Accepté, il se transforme en facture ;
 - un brouillon se modifie et se supprime librement ; il n'a pas de numéro ;
 - l'émission attribue le numéro suivant de l'émetteur (par type de pièce et par année, sans trou), fige une copie de
   l'émetteur et du client, et archive le PDF : la pièce ne change plus ;
@@ -277,8 +279,10 @@ def problems(invoice, issue_date=None):
         found.append("Une ligne n'a pas de désignation.")
     if invoice.total_ttc_cents <= 0:
         found.append("Le total doit être positif.")
-    if invoice.service_date is None:
+    if invoice.service_date is None and not invoice.is_quote:
         found.append("Indiquez la date de la prestation (ou de la vente) : c'est une mention obligatoire.")
+    if invoice.is_quote and invoice.valid_until and invoice.valid_until < issue_date:
+        found.append("La date de validité du devis est avant sa date d'émission.")
     if invoice.service_end and invoice.service_date and invoice.service_end < invoice.service_date:
         found.append("La fin de la période est avant son début.")
     if invoice.due_date and invoice.due_date < issue_date:
@@ -313,7 +317,7 @@ def _next_number(issuer, kind, year):
         sequence = NumberSequence(issuer_id=issuer.id, kind=kind, year=year, last_number=0)
         db.session.add(sequence)
     sequence.last_number += 1
-    prefix = issuer.credit_prefix if kind == Invoice.CREDIT else issuer.invoice_prefix
+    prefix = {Invoice.CREDIT: issuer.credit_prefix, Invoice.QUOTE: issuer.quote_prefix}.get(kind, issuer.invoice_prefix)
     return sequence.last_number, f"{prefix}{year}-{sequence.last_number:0{issuer.number_digits}d}"
 
 
@@ -330,11 +334,19 @@ def issue(invoice, by=None, issue_date=None):
     invoice.sequence_year = issue_date.year
     invoice.sequence_number, invoice.number = _next_number(issuer, invoice.kind, issue_date.year)
     invoice.issue_date = issue_date
-    if invoice.due_date is None and not invoice.is_credit:
+    if invoice.is_quote:
+        invoice.due_date = None
+        if invoice.valid_until is None:
+            invoice.valid_until = issue_date + timedelta(days=issuer.quote_validity_days)
+    elif invoice.due_date is None and not invoice.is_credit:
         invoice.due_date = issue_date + timedelta(days=issuer.payment_terms_days)
     invoice.issuer_snapshot = issuer_snapshot(issuer)
     invoice.customer_snapshot = invoice.recipient
-    if invoice.customer_snapshot.get("kind") == Customer.ORGANISATION and not issuer.late_penalty:
+    if (
+        invoice.kind == Invoice.INVOICE
+        and invoice.customer_snapshot.get("kind") == Customer.ORGANISATION
+        and not issuer.late_penalty
+    ):
         invoice.issuer_snapshot["late_penalty"] = DEFAULT_LATE_PENALTY
     invoice.status = Invoice.ISSUED
     invoice.issued_at = datetime.now()
@@ -363,7 +375,7 @@ def creditable_cents(invoice):
 
 def new_credit_note(invoice, by=None):
     """Brouillon d'avoir qui reprend toutes les lignes de la facture (à réduire pour un avoir partiel)."""
-    if invoice.is_credit or invoice.status != Invoice.ISSUED:
+    if invoice.kind != Invoice.INVOICE or invoice.status != Invoice.ISSUED:
         raise BillingError("Seule une facture émise peut être corrigée par un avoir.")
     if creditable_cents(invoice) <= 0:
         raise BillingError("Cette facture est déjà entièrement annulée par des avoirs.")
@@ -394,16 +406,9 @@ def new_credit_note(invoice, by=None):
     return credit
 
 
-def duplicate(invoice, by=None):
-    """Nouveau brouillon de facture, avec le même émetteur, le même client et les mêmes lignes."""
-    if invoice.is_credit:
-        raise BillingError("Un avoir ne se duplique pas.")
-    copy = new_draft(invoice.issuer, invoice.customer, by, recipient=_one_off(invoice))
-    copy.subject = invoice.subject
-    copy.notes = invoice.notes
-    copy.customer_reference = invoice.customer_reference
+def _copy_lines(source, target):
     set_lines(
-        copy,
+        target,
         [
             LineInput(
                 label=line.label,
@@ -411,13 +416,70 @@ def duplicate(invoice, by=None):
                 quantity=line.quantity,
                 unit=line.unit,
                 unit_price_cents=line.unit_price_cents,
-                vat_rate=default_vat_rate(invoice.issuer) if line.product is None else line.vat_rate,
+                vat_rate=line.vat_rate if source.issuer.subject_to_vat else default_vat_rate(target.issuer),
                 product_id=line.product_id,
             )
-            for line in invoice.lines
+            for line in source.lines
         ],
     )
+
+
+def duplicate(invoice, by=None):
+    """Nouveau brouillon du même type (facture ou devis), avec le même émetteur, le même client et les mêmes
+    lignes."""
+    if invoice.is_credit:
+        raise BillingError("Un avoir ne se duplique pas.")
+    copy = new_draft(invoice.issuer, invoice.customer, by, kind=invoice.kind, recipient=_one_off(invoice))
+    copy.subject = invoice.subject
+    copy.notes = invoice.notes
+    copy.customer_reference = invoice.customer_reference
+    _copy_lines(invoice, copy)
     return copy
+
+
+# ---------------------------------------------------------------------------
+# Devis
+# ---------------------------------------------------------------------------
+
+
+def _require_issued_quote(quote):
+    if not quote.is_quote or quote.status != Invoice.ISSUED:
+        raise BillingError("Cette action concerne un devis émis.")
+
+
+def decide(quote, decision, by=None):
+    """Le client accepte ou refuse le devis ; None le remet en attente. Sans commit."""
+    _require_issued_quote(quote)
+    if decision not in (None, *Invoice.DECISIONS):
+        raise BillingError("Décision inconnue.")
+    if decision != Invoice.ACCEPTED and any(not i.is_credit for i in quote.quote_invoices):
+        raise BillingError("Ce devis a déjà été facturé : il reste accepté.")
+    quote.decision = decision
+    quote.decided_at = datetime.now() if decision else None
+
+
+def invoice_from_quote(quote, by=None):
+    """Brouillon de facture reprenant le devis (destinataire, objet, lignes). Le devis est accepté au passage."""
+    _require_issued_quote(quote)
+    if quote.decision == Invoice.REFUSED:
+        raise BillingError("Ce devis a été refusé : remettez-le en attente avant de le facturer.")
+    if quote.quote_invoices:
+        raise BillingError("Ce devis a déjà sa facture : retrouvez-la depuis la fiche du devis.")
+    if quote.issuer.archived:
+        raise BillingError("L'émetteur de ce devis est archivé.")
+    customer = quote.customer if quote.customer is not None and not quote.customer.archived else None
+    recipient = None if customer is not None else quote.recipient
+    invoice = new_draft(quote.issuer, customer, by, recipient=recipient)
+    invoice.quote = quote
+    invoice.subject = quote.subject
+    invoice.notes = quote.notes
+    invoice.customer_reference = quote.customer_reference
+    invoice.service_date = quote.service_date
+    invoice.service_end = quote.service_end
+    _copy_lines(quote, invoice)
+    if quote.decision is None:
+        decide(quote, Invoice.ACCEPTED, by)
+    return invoice
 
 
 # ---------------------------------------------------------------------------
@@ -426,7 +488,7 @@ def duplicate(invoice, by=None):
 
 
 def add_payment(invoice, amount_cents, paid_on, method, reference=None, note=None, by=None):
-    if invoice.is_credit or invoice.status != Invoice.ISSUED:
+    if invoice.kind != Invoice.INVOICE or invoice.status != Invoice.ISSUED:
         raise BillingError("Un règlement s'enregistre sur une facture émise.")
     if method not in Payment.METHODS:
         raise BillingError("Mode de règlement inconnu.")
@@ -475,8 +537,38 @@ STATES = {
 }
 TONES = {DRAFT: "", DUE: "badge-info", LATE: "badge-warn", PARTIAL: "badge-info", PAID: "badge-ok", CANCELLED: ""}
 
+# États d'un devis émis.
+PENDING, ACCEPTED, REFUSED, EXPIRED, INVOICED = "en_attente", "accepte", "refuse", "expire", "facture"
+QUOTE_STATES = {
+    DRAFT: "Brouillon",
+    PENDING: "En attente",
+    ACCEPTED: "Accepté",
+    REFUSED: "Refusé",
+    EXPIRED: "Expiré",
+    INVOICED: "Facturé",
+}
+INVOICE_STATES = dict(STATES)  # filtres de la liste des factures
+STATES.update({k: v for k, v in QUOTE_STATES.items() if k != DRAFT})
+TONES.update({PENDING: "badge-info", ACCEPTED: "badge-ok", REFUSED: "", EXPIRED: "badge-warn", INVOICED: "badge-ok"})
+
+
+def quote_state(quote):
+    if quote.is_draft:
+        return DRAFT
+    if any(not i.is_credit for i in quote.quote_invoices):
+        return INVOICED
+    if quote.decision == Invoice.ACCEPTED:
+        return ACCEPTED
+    if quote.decision == Invoice.REFUSED:
+        return REFUSED
+    if quote.valid_until and quote.valid_until < date.today():
+        return EXPIRED
+    return PENDING
+
 
 def state(invoice):
+    if invoice.is_quote:
+        return quote_state(invoice)
     if invoice.is_draft:
         return DRAFT
     if invoice.is_credit:

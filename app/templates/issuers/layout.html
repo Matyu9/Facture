@@ -11,22 +11,21 @@
   <div class="actions"><a href="{{ url_for('issuers.preview', issuer_id=issuer.id) }}" role="button" class="secondary outline" target="_blank" rel="noopener">Aperçu enregistré</a></div>
 </div>
 
-<section class="card">
-  <h2>Logo</h2>
-  <p class="muted small">PNG, JPEG ou WebP ; un fond transparent rend mieux, surtout en bandeau. Sans logo propre, celui de l'appli (Paramètres → Apparence) est utilisé.</p>
-  <div class="logo-row">
-    {% if issuer.logo %}<img class="issuer-logo" src="{{ url_for('issuers.logo_file', name=issuer.logo.rsplit('/', 1)[-1]) }}" alt="Logo actuel">{% endif %}
-    <form method="post" action="{{ url_for('issuers.set_logo', issuer_id=issuer.id) }}" enctype="multipart/form-data" class="logo-form actions">
-      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-      <input type="file" name="logo" accept="image/png,image/jpeg,image/webp" aria-label="Logo de l'émetteur">
-      <button type="submit" class="secondary small">{{ "Changer" if issuer.logo else "Ajouter" }}</button>
-      {% if issuer.logo %}<button type="submit" name="remove" value="1" class="link-button">Retirer</button>{% endif %}
-    </form>
-  </div>
-</section>
-
-<form method="post" novalidate>
+<form method="post" novalidate enctype="multipart/form-data">
   {{ form.hidden_tag() }}
+  <section class="card">
+    <h2>Logo</h2>
+    <p class="muted small">PNG, JPEG ou WebP. Sans logo propre, celui de l'appli (Paramètres → Apparence) est utilisé. Le nouveau logo est enregistré avec le reste, par le bouton « Enregistrer » en bas de page.</p>
+    <div class="logo-row">
+      {% if issuer.logo %}<img class="issuer-logo" src="{{ url_for('issuers.logo_file', name=issuer.logo.rsplit('/', 1)[-1]) }}" alt="Logo actuel">{% endif %}
+      <div>
+        <input type="file" name="logo" accept="image/png,image/jpeg,image/webp" aria-label="{{ 'Changer le logo' if issuer.logo else 'Ajouter un logo' }}"{% if logo_error %} aria-invalid="true"{% endif %}>
+        {% if logo_error %}<small class="error">{{ logo_error }}</small>{% endif %}
+        {% if issuer.logo %}<label>{{ form.remove_logo() }} {{ form.remove_logo.label.text }}</label>{% endif %}
+      </div>
+    </div>
+  </section>
+
   <fieldset class="choices">
     <legend>{{ form.pdf_layout.label.text }}</legend>
     {% for option in form.pdf_layout %}

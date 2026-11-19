@@ -3,7 +3,7 @@
 {% from "partials/_icons.html" import icon %}
 {% block title %}{{ invoice.kind_label }} {{ invoice.number or "en brouillon" }}{% endblock %}
 {% block content %}
-<p><a href="{{ url_for('invoices.index') }}">← Factures</a></p>
+<p><a href="{{ url_for('quotes.index' if invoice.is_quote else 'invoices.index') }}">← {{ "Devis" if invoice.is_quote else "Factures" }}</a></p>
 <div class="page-head">
   <div>
     <h1>{{ invoice.kind_label }} {{ invoice.number or "en brouillon" }} <span class="badge {{ tones.get(state, '') }}">{{ states[state] }}</span></h1>
@@ -29,9 +29,40 @@
     {% else %}
       {% if can(current_user, "invoice.issue") %}
       <a href="{{ url_for('invoices.send', invoice_id=invoice.id) }}" role="button" class="secondary">Envoyer</a>
-      {% if invoice.balance_cents > 0 and invoice.sent_at %}<a href="{{ url_for('invoices.send', invoice_id=invoice.id, relance=1) }}" role="button" class="secondary outline">Relancer</a>{% endif %}
+      {% if invoice.balance_cents > 0 and invoice.sent_at and not invoice.is_quote %}<a href="{{ url_for('invoices.send', invoice_id=invoice.id, relance=1) }}" role="button" class="secondary outline">Relancer</a>{% endif %}
       {% endif %}
-      {% if can(current_user, "invoice.edit") and not invoice.is_credit %}
+      {% if can(current_user, "invoice.edit") and invoice.is_quote %}
+        {% if state not in ("facture",) %}
+          {% if state != "refuse" %}
+          <form method="post" action="{{ url_for('quotes.to_invoice', quote_id=invoice.id) }}" data-confirm="Préparer la facture de ce devis ({{ invoice.total_ttc_cents | money }}) ? Le devis sera noté accepté.">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+            <button type="submit">Transformer en facture</button>
+          </form>
+          {% endif %}
+          {% if state != "accepte" %}
+          <form method="post" action="{{ url_for('quotes.decide', quote_id=invoice.id, action='accepter') }}">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+            <button type="submit" class="secondary outline">Marquer accepté</button>
+          </form>
+          {% endif %}
+          {% if state != "refuse" %}
+          <form method="post" action="{{ url_for('quotes.decide', quote_id=invoice.id, action='refuser') }}" data-confirm="Noter ce devis comme refusé par le client ?">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+            <button type="submit" class="secondary outline">Marquer refusé</button>
+          </form>
+          {% endif %}
+          {% if invoice.decision %}
+          <form method="post" action="{{ url_for('quotes.decide', quote_id=invoice.id, action='attente') }}">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+            <button type="submit" class="link-button">Remettre en attente</button>
+          </form>
+          {% endif %}
+        {% endif %}
+      <form method="post" action="{{ url_for('invoices.duplicate', invoice_id=invoice.id) }}">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <button type="submit" class="secondary outline">Dupliquer</button>
+      </form>
+      {% elif can(current_user, "invoice.edit") and not invoice.is_credit %}
       {% if creditable > 0 %}
       <form method="post" action="{{ url_for('invoices.credit', invoice_id=invoice.id) }}" data-confirm="Préparer un avoir sur {{ invoice.number }} ? Il reprend toutes les lignes : vous pourrez le réduire avant de l'émettre.">
         <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
@@ -54,11 +85,15 @@
   <p>Avant d'émettre, il reste à régler :</p>
   <ul>{% for p in problems %}<li>{{ p }}</li>{% endfor %}</ul>
   {% elif can(current_user, "invoice.issue") %}
+  {% if invoice.is_quote %}
+  <p class="muted small">Une fois émis, le devis reçoit le numéro suivant de {{ invoice.issuer.name }} et son PDF est archivé : il ne se modifie plus (pour une nouvelle proposition, dupliquez-le). Il peut ensuite être envoyé, accepté ou refusé, et transformé en facture.</p>
+  {% else %}
   <p class="muted small">Une fois émise, la pièce reçoit le numéro suivant de {{ invoice.issuer.name }}, son PDF est archivé, et elle ne peut plus être modifiée ni supprimée : une erreur se corrige par un avoir.</p>
-  <form method="post" action="{{ url_for('invoices.issue', invoice_id=invoice.id) }}" class="inline-form" data-confirm="Émettre {{ 'cet avoir' if invoice.is_credit else 'cette facture' }} de {{ invoice.total_ttc_cents | money }} ? Elle ne pourra plus être modifiée.">
+  {% endif %}
+  <form method="post" action="{{ url_for('invoices.issue', invoice_id=invoice.id) }}" class="inline-form" data-confirm="Émettre {{ {'avoir': 'cet avoir', 'devis': 'ce devis'}.get(invoice.kind, 'cette facture') }} de {{ invoice.total_ttc_cents | money }} ? La pièce ne pourra plus être modifiée.">
     {{ issue_form.hidden_tag() }}
     <label>{{ issue_form.issue_date.label.text }} {{ issue_form.issue_date() }}</label>
-    <button type="submit">Émettre {{ "l'avoir" if invoice.is_credit else "la facture" }}</button>
+    <button type="submit">Émettre {{ {'avoir': "l'avoir", 'devis': 'le devis'}.get(invoice.kind, 'la facture') }}</button>
   </form>
   {% else %}<p class="muted">Prête à émettre. Votre rôle ne permet pas d'émettre : demandez-le à un responsable.</p>{% endif %}
 </section>
@@ -69,7 +104,12 @@
     <h2>Pièce</h2>
     <dl class="props">
       <dt>Émise le</dt><dd>{{ invoice.issue_date | date_fr if invoice.issue_date else "pas encore" }}{% if invoice.issued_by %} <span class="meta muted">par {{ invoice.issued_by.full_name }}</span>{% endif %}</dd>
-      {% if not invoice.is_credit %}<dt>Échéance</dt><dd>{{ invoice.due_date | date_fr if invoice.due_date else ("à l'émission + " ~ invoice.issuer.payment_terms_days ~ " jours") }}</dd>{% endif %}
+      {% if invoice.is_quote %}<dt>Valable jusqu'au</dt><dd>{{ invoice.valid_until | date_fr if invoice.valid_until else ("à l'émission + " ~ invoice.issuer.quote_validity_days ~ " jours") }}</dd>
+      {% if invoice.decision %}<dt>Décision</dt><dd>{{ states[invoice.decision] }} le {{ invoice.decided_at | datetime_fr }}</dd>{% endif %}
+      {% if invoice.quote_invoices %}<dt>Facture</dt><dd>{% for f in invoice.quote_invoices %}<a href="{{ url_for('invoices.detail', invoice_id=f.id) }}">{{ f.number or "brouillon" }}</a>{{ ", " if not loop.last }}{% endfor %}</dd>{% endif %}
+      {% endif %}
+      {% if invoice.quote %}<dt>Devis</dt><dd><a href="{{ url_for('invoices.detail', invoice_id=invoice.quote.id) }}">{{ invoice.quote.number }}</a></dd>{% endif %}
+      {% if invoice.kind == "facture" %}<dt>Échéance</dt><dd>{{ invoice.due_date | date_fr if invoice.due_date else ("à l'émission + " ~ invoice.issuer.payment_terms_days ~ " jours") }}</dd>{% endif %}
       <dt>Prestation</dt><dd>{% if invoice.service_date %}{{ invoice.service_date | date_fr }}{% if invoice.service_end and invoice.service_end != invoice.service_date %} → {{ invoice.service_end | date_fr }}{% endif %}{% else %}—{% endif %}</dd>
       <dt>Objet</dt><dd>{{ invoice.subject or "—" }}</dd>
       {% if invoice.customer_reference %}<dt>Réf. client</dt><dd>{{ invoice.customer_reference }}</dd>{% endif %}
@@ -87,7 +127,7 @@
       {% for rate, base, vat in invoice.vat_breakdown %}<dt>TVA {{ rate | rate }}</dt><dd>{{ vat | money }} <span class="muted small">sur {{ base | money }}</span></dd>{% endfor %}
       {% endif %}
       <dt>Total{{ " TTC" if invoice.vat_breakdown }}</dt><dd><strong>{{ invoice.total_ttc_cents | money }}</strong></dd>
-      {% if not invoice.is_draft and not invoice.is_credit %}
+      {% if not invoice.is_draft and invoice.kind == "facture" %}
       <dt>Réglé</dt><dd>{{ invoice.paid_cents | money }}</dd>
       {% if invoice.credited_cents %}<dt>Avoirs</dt><dd>− {{ invoice.credited_cents | money }}</dd>{% endif %}
       <dt>Reste à payer</dt><dd><strong>{{ invoice.balance_cents | money }}</strong></dd>
@@ -115,7 +155,7 @@
 </table></div>
 {% if invoice.notes %}<p><strong>Remarques :</strong> {{ invoice.notes }}</p>{% endif %}
 
-{% if not invoice.is_draft and not invoice.is_credit %}
+{% if not invoice.is_draft and invoice.kind == "facture" %}
 <h2 id="reglements">Règlements</h2>
 <div class="overflow-auto"><table class="striped responsive">
   <thead><tr><th>Reçu le</th><th>Mode</th><th>Référence</th><th class="num">Montant</th><th></th></tr></thead>

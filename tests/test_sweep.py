@@ -9,7 +9,7 @@ from urllib.parse import urljoin, urlsplit
 import pytest
 
 from app.extensions import db
-from app.models import Customer, Issuer, Notification, Product, Role
+from app.models import Customer, Invoice, Issuer, Notification, Product, Role
 from app.services import api_tokens, billing
 from app.services.activity import log
 
@@ -89,13 +89,28 @@ ACCESS = {
     "invoices.send": ISSUE,
     "invoices.add_payment": PAY,
     "invoices.delete_payment": PAY,
+    "quotes.index": VIEW,
+    **{f"quotes.{name}": EDIT for name in ("create", "decide", "to_invoice")},
     **{f"customers.{name}": VIEW for name in ("index", "detail")},
     **{f"customers.{name}": EDIT for name in ("create", "edit", "archive", "delete")},
     "products.index": VIEW,
     **{f"products.{name}": EDIT for name in ("create", "edit", "archive")},
     **{f"issuers.{name}": VIEW for name in ("index", "detail", "logo_file", "preview")},
-    **{f"issuers.{name}": ISSUER for name in ("create", "edit", "archive", "set_logo", "layout")},
-    **{f"api.{name}": API for name in ("issuers", "invoices", "invoice", "invoice_pdf", "create_invoice")},
+    **{f"issuers.{name}": ISSUER for name in ("create", "edit", "archive", "layout")},
+    **{
+        f"api.{name}": API
+        for name in (
+            "issuers",
+            "invoices",
+            "invoice",
+            "invoice_pdf",
+            "create_invoice",
+            "issue",
+            "send",
+            "decide",
+            "quote_to_invoice",
+        )
+    },
 }
 HOLDERS = {
     SETTINGS: {A},
@@ -123,6 +138,8 @@ ARGUMENTS = {
     "customer_id": 999,
     "product_id": 999,
     "issuer_id": 999,
+    "quote_id": 999,
+    "action": "accepter",
     "token_id": 999,
 }
 # Publiques, mais renvoient légitimement vers la connexion : rien en cours, ou lien inconnu.
@@ -131,7 +148,8 @@ SENDS_TO_LOGIN = {"auth.logout", "auth.two_factor", "auth.token_link"}
 
 def url_of(app, rule):
     with app.test_request_context():
-        return rule.build({arg: ARGUMENTS[arg] for arg in rule.arguments})[1]
+        defaults = rule.defaults or {}
+        return rule.build({arg: defaults[arg] if arg in defaults else ARGUMENTS[arg] for arg in rule.arguments})[1]
 
 
 def is_login_redirect(response):
@@ -268,6 +286,26 @@ def rich(app, accounts):
     draft = billing.new_draft(issuer, family)
     draft.service_date = date.today()
     billing.set_lines(draft, [billing.LineInput(label="Cotisation <b>", quantity=Decimal("1"), unit_price_cents=25000)])
+    # Devis : en attente, refusé, et un autre passé en facture ; destinataire ponctuel.
+    for decision in (None, Invoice.REFUSED, "facture"):
+        quote = billing.new_draft(issuer, customer, kind=Invoice.QUOTE)
+        quote.subject = "Devis <b>concert</b>"
+        billing.set_lines(
+            quote,
+            [
+                billing.LineInput(
+                    label="Concert <b>", quantity=Decimal("1"), unit_price_cents=50000, vat_rate=Decimal("20")
+                )
+            ],
+        )
+        billing.issue(quote)
+        db.session.flush()
+        if decision == "facture":
+            billing.invoice_from_quote(quote)
+        elif decision:
+            billing.decide(quote, decision)
+    one_off = billing.new_draft(issuer, None, recipient={"name": "Jeanne <b>Durand</b>", "address": "4 rue"})
+    billing.set_lines(one_off, [billing.LineInput(label="Cours", quantity=Decimal("1"), unit_price_cents=5000)])
     db.session.flush()
     log("invoice.issue", "Facture <em>émise</em>", user=accounts[A], invoice=issued, customer=customer)
     api_tokens.create("adherents <b>")

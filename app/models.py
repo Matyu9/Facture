@@ -286,6 +286,8 @@ class Issuer(ArchivableMixin, TimestampMixin, db.Model):
     # Numérotation : <préfixe><année>-<numéro> (FA-2026-0001), reprise à 1 chaque année, séparée pour les avoirs.
     invoice_prefix = db.Column(db.String(20), nullable=False, default="FA-")
     credit_prefix = db.Column(db.String(20), nullable=False, default="AV-")
+    quote_prefix = db.Column(db.String(20), nullable=False, default="DE-", server_default="DE-")
+    quote_validity_days = db.Column(db.Integer, nullable=False, default=30, server_default="30")
     number_digits = db.Column(db.Integer, nullable=False, default=4)
     payment_terms_days = db.Column(db.Integer, nullable=False, default=30)
     iban = db.Column(db.String(40))
@@ -326,7 +328,7 @@ class NumberSequence(db.Model):
     """Dernier numéro attribué, par émetteur, type de pièce et année. Lu et incrémenté sous verrou : pas de trou."""
 
     issuer_id = db.Column(db.ForeignKey("issuer.id", ondelete="RESTRICT"), primary_key=True)
-    kind = db.Column(db.String(10), primary_key=True)  # Invoice.INVOICE ou Invoice.CREDIT
+    kind = db.Column(db.String(10), primary_key=True)  # Invoice.INVOICE, Invoice.CREDIT ou Invoice.QUOTE
     year = db.Column(db.Integer, primary_key=True)
     last_number = db.Column(db.Integer, nullable=False, default=0)
 
@@ -412,7 +414,14 @@ class Invoice(TimestampMixin, db.Model):
 
     INVOICE = "facture"
     CREDIT = "avoir"
-    KINDS = {INVOICE: "Facture", CREDIT: "Avoir"}
+    QUOTE = "devis"
+    KINDS = {INVOICE: "Facture", CREDIT: "Avoir", QUOTE: "Devis"}
+    # Pièces comptables (journal des ventes, encaissements) : un devis n'en est pas une.
+    BILLING_KINDS = (INVOICE, CREDIT)
+    # Décision du client sur un devis émis.
+    ACCEPTED = "accepte"
+    REFUSED = "refuse"
+    DECISIONS = {ACCEPTED: "Accepté", REFUSED: "Refusé"}
     DRAFT = "brouillon"
     ISSUED = "emise"
 
@@ -451,6 +460,11 @@ class Invoice(TimestampMixin, db.Model):
     pdf_sha256 = db.Column(db.String(64))
     sent_at = db.Column(db.DateTime)
     sent_to = db.Column(db.String(255))
+    # Devis : validité, décision du client, et facture qui en est issue (Invoice.quote_id).
+    valid_until = db.Column(db.Date)
+    decision = db.Column(db.String(10))
+    decided_at = db.Column(db.DateTime)
+    quote_id = db.Column(db.ForeignKey("invoice.id", ondelete="RESTRICT"), index=True)
     # Pièce créée par une autre appli (API) : sa référence, et la clé qui rend une nouvelle tentative sans effet.
     source = db.Column(db.String(30))
     external_id = db.Column(db.String(80))
@@ -464,8 +478,14 @@ class Invoice(TimestampMixin, db.Model):
     payments = db.relationship(
         "Payment", back_populates="invoice", order_by="Payment.paid_on", cascade="all, delete-orphan"
     )
-    credited_invoice = db.relationship("Invoice", remote_side=[id], back_populates="credit_notes")
-    credit_notes = db.relationship("Invoice", back_populates="credited_invoice", order_by="Invoice.id")
+    credited_invoice = db.relationship(
+        "Invoice", remote_side=[id], back_populates="credit_notes", foreign_keys=[credited_invoice_id]
+    )
+    credit_notes = db.relationship(
+        "Invoice", back_populates="credited_invoice", order_by="Invoice.id", foreign_keys=[credited_invoice_id]
+    )
+    quote = db.relationship("Invoice", remote_side=[id], back_populates="quote_invoices", foreign_keys=[quote_id])
+    quote_invoices = db.relationship("Invoice", back_populates="quote", order_by="Invoice.id", foreign_keys=[quote_id])
     issued_by = db.relationship("Account", foreign_keys=[issued_by_id])
     created_by = db.relationship("Account", foreign_keys=[created_by_id])
 
@@ -476,6 +496,10 @@ class Invoice(TimestampMixin, db.Model):
     @property
     def is_credit(self):
         return self.kind == self.CREDIT
+
+    @property
+    def is_quote(self):
+        return self.kind == self.QUOTE
 
     @property
     def kind_label(self):
@@ -513,7 +537,7 @@ class Invoice(TimestampMixin, db.Model):
     @property
     def balance_cents(self):
         """Reste à payer d'une facture émise : total, moins les règlements et les avoirs émis."""
-        if self.is_credit or self.is_draft:
+        if self.kind != self.INVOICE or self.is_draft:
             return 0
         return self.total_ttc_cents - self.paid_cents - self.credited_cents
 
@@ -521,7 +545,7 @@ class Invoice(TimestampMixin, db.Model):
     def overdue(self):
         return (
             not self.is_draft
-            and not self.is_credit
+            and self.kind == self.INVOICE
             and self.balance_cents > 0
             and self.due_date is not None
             and self.due_date < date.today()

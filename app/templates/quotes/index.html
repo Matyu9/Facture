@@ -1,0 +1,54 @@
+{% extends "base.html" %}
+{% block title %}Devis{% endblock %}
+{% block content %}
+<div class="page-head">
+  <div>
+    <h1>Devis</h1>
+    <p class="muted">{{ total }} devis. Accepté, un devis se transforme en facture d'un clic.</p>
+  </div>
+  <div class="actions">
+    {% if edit %}<a href="{{ url_for('quotes.create') }}" role="button">+ Nouveau devis</a>{% endif %}
+  </div>
+</div>
+<form method="get" class="filters">
+  <input type="search" name="q" value="{{ params.q }}" placeholder="Client, objet ou numéro" aria-label="Recherche">
+  <select name="emetteur" aria-label="Émetteur" data-autosubmit>
+    <option value="">Tous les émetteurs</option>
+    {% for i in issuers %}<option value="{{ i.id }}" {{ "selected" if params.emetteur == i.id }}>{{ i.name }}</option>{% endfor %}
+  </select>
+  <select name="etat" aria-label="État" data-autosubmit>
+    <option value="">Tous les états</option>
+    {% for key, label in states.items() %}<option value="{{ key }}" {{ "selected" if params.etat == key }}>{{ label }}</option>{% endfor %}
+  </select>
+  <noscript><button type="submit">Filtrer</button></noscript>
+</form>
+<div class="stats">
+  <div class="stat card"><span class="stat-value">{{ summary.pending | money }}</span><span class="stat-label">En attente ({{ summary.pending_count }})</span></div>
+  <div class="stat card"><span class="stat-value">{{ summary.accepted | money }}</span><span class="stat-label">Acceptés, à facturer ({{ summary.accepted_count }})</span></div>
+</div>
+<div class="overflow-auto"><table class="striped responsive">
+  <thead><tr><th>Devis</th><th>Date</th><th>Client</th><th>Objet</th><th class="num">Total</th><th>Valable jusqu'au</th><th>État</th></tr></thead>
+  <tbody>
+  {% for i in items %}{% set st = state(i) %}
+  <tr>
+    <td data-label="Devis"><span><a href="{{ url_for('invoices.detail', invoice_id=i.id) }}">{{ i.number or "Brouillon" }}</a><br><small class="muted">{{ i.issuer.name }}</small></span></td>
+    <td data-label="Date">{{ i.issue_date | date_fr if i.issue_date else "—" }}</td>
+    <td data-label="Client">{% if i.customer_id %}<a href="{{ url_for('customers.detail', customer_id=i.customer_id) }}">{{ i.recipient_name }}</a>{% else %}{{ i.recipient_name }}{% endif %}</td>
+    <td data-label="Objet"><small>{{ i.subject or "—" }}</small></td>
+    <td data-label="Total" class="num">{{ i.total_ttc_cents | money }}</td>
+    <td data-label="Valable jusqu'au">{{ i.valid_until | date_fr if i.valid_until else "—" }}</td>
+    <td data-label="État"><span class="badge {{ tones.get(st, '') }}">{{ states[st] }}</span></td>
+  </tr>
+  {% else %}
+  <tr><td colspan="7" class="muted">Aucun devis ne correspond.</td></tr>
+  {% endfor %}
+  </tbody>
+</table></div>
+{% if pages > 1 %}
+<div class="actions">
+  {% if page > 1 %}<a href="{{ url_for('quotes.index', page=page - 1, **params) }}">← Précédents</a>{% endif %}
+  <span class="muted small">Page {{ page }} sur {{ pages }}</span>
+  {% if page < pages %}<a href="{{ url_for('quotes.index', page=page + 1, **params) }}">Suivants →</a>{% endif %}
+</div>
+{% endif %}
+{% endblock %}

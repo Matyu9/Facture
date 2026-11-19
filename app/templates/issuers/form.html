@@ -21,9 +21,9 @@
   {{ field(form.vat_mention) }}<small class="muted">{{ form.vat_mention.description }}</small>
 
   <h2>Numérotation et paiement</h2>
-  <p class="muted small">Numéros continus, sans trou, repris à 1 chaque année : <code>&lt;préfixe&gt;2026-0001</code>. Factures et avoirs ont chacun leur série.</p>
-  <div class="grid"><div>{{ field(form.invoice_prefix) }}</div><div>{{ field(form.credit_prefix) }}</div><div>{{ field(form.number_digits) }}</div></div>
-  <div class="grid"><div>{{ field(form.payment_terms_days) }}</div><div>{{ field(form.iban) }}</div><div>{{ field(form.bic) }}</div></div>
+  <p class="muted small">Numéros continus, sans trou, repris à 1 chaque année : <code>&lt;préfixe&gt;2026-0001</code>. Factures, avoirs et devis ont chacun leur série.</p>
+  <div class="grid"><div>{{ field(form.invoice_prefix) }}</div><div>{{ field(form.credit_prefix) }}</div><div>{{ field(form.quote_prefix) }}</div><div>{{ field(form.number_digits) }}</div></div>
+  <div class="grid"><div>{{ field(form.quote_validity_days) }}</div><div>{{ field(form.payment_terms_days) }}</div><div>{{ field(form.iban) }}</div><div>{{ field(form.bic) }}</div></div>
   {{ field(form.payment_instructions, rows=2, placeholder="Règlement par virement, ou par chèque à l'ordre de …") }}
   {{ field(form.late_penalty, rows=3) }}<small class="muted">{{ form.late_penalty.description }}</small>
   {{ field(form.footer, rows=2) }}

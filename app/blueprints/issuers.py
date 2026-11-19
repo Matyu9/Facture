@@ -110,6 +110,16 @@ class IssuerForm(FlaskForm):
         validators=[DataRequired(), Length(max=20), Regexp(r"^[A-Za-z0-9_-]*$", message="Lettres, chiffres, - et _.")],
         default="AV-",
     )
+    quote_prefix = StringField(
+        "Préfixe des devis",
+        validators=[DataRequired(), Length(max=20), Regexp(r"^[A-Za-z0-9_-]*$", message="Lettres, chiffres, - et _.")],
+        default="DE-",
+    )
+    quote_validity_days = IntegerField(
+        "Validité des devis (jours)",
+        validators=[NumberRange(min=1, max=365, message="Entre 1 et 365 jours.")],
+        default=30,
+    )
     number_digits = IntegerField("Chiffres du numéro", validators=[NumberRange(min=3, max=8)], default=4)
     payment_terms_days = IntegerField(
         "Délai de paiement (jours)",
@@ -161,6 +171,12 @@ class IssuerForm(FlaskForm):
         if self.vat_regime.data == Issuer.SUBJECT and not self.vat_number.data:
             self.vat_number.errors = [*self.vat_number.errors, "Obligatoire pour un émetteur assujetti à la TVA."]
             ok = False
+        # Chaque série a son préfixe : sinon la facture et le devis n° 1 porteraient le même numéro.
+        prefixes = [self.invoice_prefix, self.credit_prefix, self.quote_prefix]
+        for i, field in enumerate(prefixes):
+            if any(field.data == other.data for other in prefixes[:i]):
+                field.errors = [*field.errors, "Ce préfixe est déjà pris par une autre série de cet émetteur."]
+                ok = False
         return ok
 
     def _has_issued(self):
@@ -180,6 +196,7 @@ class LayoutForm(FlaskForm):
         filters=[lambda v: v.strip().lower() if isinstance(v, str) else v],
         render_kw={"type": "color"},
     )
+    remove_logo = BooleanField("Retirer le logo")
     logo_size = SelectField("Taille du logo", choices=list(Issuer.LOGO_SIZES.items()), default="moyen")
     logo_position = SelectField("Position du logo", choices=list(Issuer.LOGO_POSITIONS.items()), default="gauche")
     recipient_label = StringField(
@@ -317,32 +334,54 @@ def archive(issuer_id):
     return redirect(url_for(".detail", issuer_id=issuer.id))
 
 
+def _uploaded_logo():
+    """Logo envoyé avec le formulaire de mise en page, ou None. InvalidImage si ce n'est pas une image lisible."""
+    file = request.files.get("logo")
+    if not file or not file.filename:
+        return None
+    return photos.save_logo(file, size=photos.PRINT_LOGO_SIZE)
+
+
 @bp.route("/<int:issuer_id>/mise-en-page", methods=["GET", "POST"])
 @require("issuer.manage")
 def layout(issuer_id):
+    """Mise en page et logo, dans un seul formulaire : changer le logo ne perd pas les autres réglages en cours."""
     issuer = db.session.get(Issuer, issuer_id) or abort(404)
     form = LayoutForm(obj=issuer)
+    logo_error = None
     if request.method == "GET":
         form.app_color.data = not issuer.pdf_color
         form.pdf_color.data = issuer.pdf_color or branding.current().theme_color
     if form.validate_on_submit():
-        values = form.values()
-        changes = diff(issuer, list(values), values)
-        if changes:
-            log("issuer.layout", f"Mise en page modifiée : {issuer.name}", changes=changes)
-        db.session.commit()
-        flash("Mise en page enregistrée. Les pièces déjà émises gardent leur apparence d'origine.", "success")
-        return redirect(url_for(".layout", issuer_id=issuer.id))
-    return render_template("issuers/layout.html", issuer=issuer, form=form)
+        try:
+            new_logo = _uploaded_logo()
+        except InvalidImage as exc:
+            logo_error = str(exc)
+        else:
+            values = form.values()
+            changes = diff(issuer, list(values), values)
+            if new_logo:
+                # L'ancien fichier reste : les PDF émis ont intégré le logo, mais par prudence on ne l'efface pas.
+                issuer.logo = new_logo
+                changes["logo"] = ["(ancien)", "(nouveau)"]
+            elif form.remove_logo.data and issuer.logo:
+                issuer.logo = None
+                changes["logo"] = ["(ancien)", "(retiré)"]
+            if changes:
+                log("issuer.layout", f"Mise en page modifiée : {issuer.name}", changes=changes)
+            db.session.commit()
+            flash("Mise en page enregistrée. Les pièces déjà émises gardent leur apparence d'origine.", "success")
+            return redirect(url_for(".layout", issuer_id=issuer.id))
+    return render_template("issuers/layout.html", issuer=issuer, form=form, logo_error=logo_error)
 
 
 @bp.route("/<int:issuer_id>/apercu.pdf", methods=["GET", "POST"])
 @require("invoice.view")
 def preview(issuer_id):
     """Facture d'exemple : avec la mise en page enregistrée (GET), ou celle du formulaire, pas encore enregistrée
-    (POST, depuis le bouton « Aperçu »)."""
+    (POST, depuis le bouton « Aperçu »), logo choisi compris."""
     issuer = db.session.get(Issuer, issuer_id) or abort(404)
-    overrides = None
+    overrides, temporary = None, None
     if request.method == "POST":
         if not can(current_user, "issuer.manage"):
             abort(403)
@@ -350,41 +389,27 @@ def preview(issuer_id):
         if not form.validate_on_submit():
             abort(400, " ".join(e for errors in form.errors.values() for e in errors))
         overrides = form.values()
+        try:
+            temporary = _uploaded_logo()
+        except InvalidImage as exc:
+            abort(400, str(exc))
+        if temporary:
+            overrides["logo"] = temporary
+        elif form.remove_logo.data:
+            overrides["logo"] = None
+    try:
+        content = pdf.preview(issuer, overrides)
+    finally:
+        if temporary:
+            photos.remove(temporary)
     return Response(
-        pdf.preview(issuer, overrides),
+        content,
         mimetype="application/pdf",
         headers={
             "Content-Disposition": f'inline; filename="apercu-{issuer.code}.pdf"',
             "Cache-Control": "private, no-store",
         },
     )
-
-
-@bp.route("/<int:issuer_id>/logo", methods=["POST"])
-@require("issuer.manage")
-def set_logo(issuer_id):
-    issuer = db.session.get(Issuer, issuer_id) or abort(404)
-    file = request.files.get("logo")
-    if request.form.get("remove"):
-        photos.remove(issuer.logo)
-        issuer.logo = None
-        log("issuer.logo", f"Logo retiré : {issuer.name}")
-        db.session.commit()
-        flash("Logo retiré.", "success")
-    elif not file or not file.filename:
-        flash("Choisissez une image.", "warning")
-    else:
-        try:
-            new = photos.save_logo(file, size=photos.PRINT_LOGO_SIZE)
-        except InvalidImage as exc:
-            flash(str(exc), "error")
-        else:
-            # L'ancien fichier reste : il a pu servir à des PDF émis (qui l'ont déjà intégré, mais par prudence).
-            issuer.logo = new
-            log("issuer.logo", f"Logo modifié : {issuer.name}")
-            db.session.commit()
-            flash("Logo enregistré.", "success")
-    return redirect(url_for(".layout", issuer_id=issuer.id))
 
 
 @bp.route("/logo/<name>")
