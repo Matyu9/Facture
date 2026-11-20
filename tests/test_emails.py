@@ -213,7 +213,8 @@ def test_ehlo_name(app, smtp, helo, base_url, expected):
         ("factures@asso.test", None, "Asso"),
         ("Facturation Asso <factures@asso.test>", None, "Facturation Asso"),
         ('"Facturation Asso" <factures@asso.test>', None, "Facturation Asso"),
-        ("Facturation Asso <factures@asso.test>", "Régie son", "Régie son"),
+        ("Facturation Asso <factures@asso.test>", "Régie son", "Facturation Asso"),
+        ("factures@asso.test", "Régie son", "Régie son"),
     ],
 )
 def test_sender_address_with_or_without_a_name(app, smtp, monkeypatch, smtp_from, sender_name, expected_name):

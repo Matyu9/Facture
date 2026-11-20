@@ -31,13 +31,13 @@ def smtp_enabled():
 def send(to, subject, text, html=None, attachments=(), sender_name=None, reply_to=None):
     """Envoie un email ; `html`, s'il est fourni, s'ajoute en alternative à la version texte.
 
-    `attachments` : [(nom, type MIME, contenu en octets)] ; `sender_name` remplace le nom de l'expéditeur
-    (celui de SMTP_FROM, sinon celui de l'association), `reply_to` reçoit les réponses (l'adresse de l'émetteur
-    d'une facture)."""
+    `attachments` : [(nom, type MIME, contenu en octets)] ; le nom de l'expéditeur est celui écrit dans SMTP_FROM,
+    sinon `sender_name` (l'émetteur d'une facture), sinon celui de l'association ; `reply_to` reçoit les réponses
+    (l'adresse de l'émetteur d'une facture)."""
     cfg = current_app.config
     from_name, from_address = sender()
     message = EmailMessage()
-    message["From"] = formataddr((sender_name or from_name or branding.name(), from_address))
+    message["From"] = formataddr((from_name or sender_name or branding.name(), from_address))
     message["To"] = to
     if reply_to:
         message["Reply-To"] = reply_to
