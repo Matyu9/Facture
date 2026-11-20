@@ -9,6 +9,7 @@ python-dotenv==1.2.4
 SQLAlchemy==2.1.8
 WTForms==3.3.2
 Authlib==1.9.8
+requests==2.34.2
 fpdf2==2.9.0
 joserfc==1.8.0
 cryptography==50.0.2

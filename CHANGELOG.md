@@ -1,5 +1,10 @@
 # Journal des versions
 
+## 0.4.1 — 20 novembre 2026
+
+- Correctif : l'image Docker ne démarrait pas. La bibliothèque `requests`, dont a besoin la connexion par Adhérents, n'était installée qu'avec les outils de développement ; elle fait maintenant partie des dépendances de l'appli.
+- Intégration continue : un nouveau job construit l'image Docker et vérifie qu'elle démarre (migrations, appli saine, scheduler) ; les tests tournent aussi sous Python 3.15, la version de l'image.
+
 ## 0.4.0 — 19 novembre 2026
 
 - Numérotation réglable par émetteur et par série (Émetteurs → fiche → Modifier la numérotation) : un format libre avec des balises, `FA-{AAAA}-{NNNN}` → FA-2026-0001. Année sur 4 ou 2 chiffres, mois, jour, ou rien ; compteur en chiffres (complété de zéros ou non) ou en lettres (A, B… Z, AA…). Le compteur repart à 1 chaque mois, chaque année ou jamais selon les balises du format. Exemple mis à jour pendant la saisie.
