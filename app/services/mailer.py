@@ -1,12 +1,15 @@
 """Envoi d'emails via SMTP (facultatif)."""
 
+import ipaddress
 import logging
 import re
 import smtplib
+import ssl
 import threading
 from datetime import datetime, timedelta
 from email.message import EmailMessage
 from email.utils import formataddr
+from urllib.parse import urlsplit
 
 from flask import current_app, render_template
 
@@ -43,12 +46,44 @@ def send(to, subject, text, html=None, attachments=(), sender_name=None, reply_t
     for name, mimetype, content in attachments:
         maintype, _, subtype = mimetype.partition("/")
         message.add_attachment(content, maintype=maintype, subtype=subtype, filename=name)
-    with smtplib.SMTP(cfg["SMTP_HOST"], cfg["SMTP_PORT"], timeout=15) as smtp:
-        if cfg["SMTP_TLS"]:
-            smtp.starttls()
+    with _connect(cfg) as smtp:
         if cfg["SMTP_USER"]:
             smtp.login(cfg["SMTP_USER"], cfg["SMTP_PASSWORD"])
         smtp.send_message(message)
+
+
+IMPLICIT_TLS_PORT = 465
+
+
+def helo_name(cfg):
+    """Nom annoncé au serveur SMTP : SMTP_HELO, sinon le domaine de BASE_URL, sinon celui de la machine (None)."""
+    if cfg.get("SMTP_HELO"):
+        return cfg["SMTP_HELO"]
+    host = urlsplit(cfg.get("BASE_URL") or "").hostname
+    if not host or "." not in host:  # localhost
+        return None
+    try:
+        ipaddress.ip_address(host)
+    except ValueError:
+        return host
+    return None  # une adresse IP n'est pas un nom de domaine
+
+
+def _connect(cfg):
+    """Connexion au serveur SMTP, chiffrée si demandé, avec vérification du certificat (STARTTLS de smtplib ne
+    vérifie rien sans contexte : n'importe qui sur le chemin pourrait se faire passer pour le serveur)."""
+    context = ssl.create_default_context()
+    host, port, helo = cfg["SMTP_HOST"], cfg["SMTP_PORT"], helo_name(cfg)
+    if port == IMPLICIT_TLS_PORT:
+        return smtplib.SMTP_SSL(host, port, local_hostname=helo, timeout=15, context=context)
+    smtp = smtplib.SMTP(host, port, local_hostname=helo, timeout=15)
+    if cfg["SMTP_TLS"]:
+        try:
+            smtp.starttls(context=context)
+        except BaseException:
+            smtp.close()
+            raise
+    return smtp
 
 
 def send_in_background(to, subject, text, html=None):

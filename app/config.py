@@ -44,7 +44,11 @@ class Config:
     SMTP_USER = os.environ.get("SMTP_USER", "")
     SMTP_PASSWORD = os.environ.get("SMTP_PASSWORD", "")
     SMTP_FROM = os.environ.get("SMTP_FROM", "")
+    # STARTTLS (587) ; le port 465 est toujours chiffré dès la connexion (TLS direct).
     SMTP_TLS = os.environ.get("SMTP_TLS", "true").lower() == "true"
+    # Nom annoncé au serveur (EHLO). Vide : le domaine de BASE_URL. Certains relais, dont celui de Google,
+    # refusent un nom qui n'est pas un domaine (dans Docker, ce serait l'identifiant du conteneur).
+    SMTP_HELO = os.environ.get("SMTP_HELO", "")
     # Envoi hors de la requête, là où sa durée révélerait si un compte existe (mot de passe oublié).
     MAIL_IN_BACKGROUND = True
 

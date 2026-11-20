@@ -1,5 +1,11 @@
 # Journal des versions
 
+## 0.4.2 — 20 novembre 2026
+
+- Emails compatibles avec le relais SMTP de Google Workspace (`smtp-relay.gmail.com`), autorisé par l'adresse IP du serveur ou par identifiant. L'appli s'annonce au serveur sous le domaine de `BASE_URL` (ou `SMTP_HELO`) au lieu du nom de la machine, l'identifiant du conteneur dans Docker, que le relais de Google peut refuser.
+- Sécurité : le certificat du serveur SMTP est maintenant vérifié. Avant, le chiffrement STARTTLS acceptait n'importe quel certificat, et quelqu'un placé sur le réseau pouvait se faire passer pour le serveur et lire le mot de passe SMTP et les factures envoyées.
+- Port 465 (TLS direct) pris en charge, en plus du port 587 (STARTTLS).
+
 ## 0.4.1 — 20 novembre 2026
 
 - Correctif : l'image Docker ne démarrait pas. La bibliothèque `requests`, dont a besoin la connexion par Adhérents, n'était installée qu'avec les outils de développement ; elle fait maintenant partie des dépendances de l'appli.

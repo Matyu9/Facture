@@ -1,4 +1,5 @@
 import smtplib
+import ssl
 from datetime import datetime, timedelta
 
 import pytest
@@ -12,10 +13,13 @@ from .conftest import make_account
 
 class FakeSMTP:
     sent, fail = [], None
+    implicit_tls = False
 
-    def __init__(self, host, port, timeout=None):
+    def __init__(self, host, port, local_hostname=None, timeout=None, context=None):
         self.host, self.port = host, port
-        self.started_tls, self.credentials = False, None
+        FakeSMTP.connected = (host, port, local_hostname)
+        if context is not None:
+            FakeSMTP.context = context
 
     def __enter__(self):
         return self
@@ -23,8 +27,11 @@ class FakeSMTP:
     def __exit__(self, *_):
         return False
 
-    def starttls(self):
-        FakeSMTP.tls = True
+    def starttls(self, context=None):
+        FakeSMTP.tls, FakeSMTP.context = True, context
+
+    def close(self):
+        pass
 
     def login(self, user, password):
         FakeSMTP.credentials = (user, password)
@@ -38,7 +45,15 @@ class FakeSMTP:
 @pytest.fixture
 def smtp(app, monkeypatch):
     FakeSMTP.sent, FakeSMTP.fail, FakeSMTP.tls, FakeSMTP.credentials = [], None, False, None
+    FakeSMTP.context, FakeSMTP.connected, FakeSMTP.implicit_tls = None, None, False
+
+    class FakeSMTPSSL(FakeSMTP):
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, **kwargs)
+            FakeSMTP.implicit_tls = True
+
     monkeypatch.setattr(smtplib, "SMTP", FakeSMTP)
+    monkeypatch.setattr(smtplib, "SMTP_SSL", FakeSMTPSSL)
     app.config.update(
         SMTP_HOST="smtp.test", SMTP_FROM="asso@asso.test", SMTP_USER="u", SMTP_PASSWORD="p", SMTP_TLS=True
     )
@@ -138,3 +153,54 @@ def test_test_email_route_reports_failures(client, admin, smtp):
 def test_long_subject_is_cut():
     assert len(mailer._shorten("x" * 300)) == 100
     assert mailer._shorten("court") == "court"
+
+
+# --- Connexion au serveur SMTP (relais Google Workspace, etc.) ---
+
+
+def test_starttls_verifies_the_server_certificate(app, smtp):
+    mailer.send("a@b.test", "Objet", "Texte")
+    assert smtp.tls and not smtp.implicit_tls
+    assert smtp.context.verify_mode == ssl.CERT_REQUIRED and smtp.context.check_hostname
+
+
+def test_port_465_uses_implicit_tls_with_a_verified_certificate(app, smtp):
+    app.config.update(SMTP_PORT=465)
+    mailer.send("a@b.test", "Objet", "Texte")
+    assert smtp.implicit_tls and not smtp.tls and smtp.connected[1] == 465
+    assert smtp.context.verify_mode == ssl.CERT_REQUIRED and smtp.context.check_hostname
+    assert len(smtp.sent) == 1
+
+
+def test_no_encryption_when_disabled(app, smtp):
+    app.config.update(SMTP_TLS=False, SMTP_PORT=25)
+    mailer.send("a@b.test", "Objet", "Texte")
+    assert not smtp.tls and not smtp.implicit_tls and len(smtp.sent) == 1
+
+
+def test_relay_by_ip_address_needs_no_login(app, smtp):
+    """Relais Google autorisé par l'adresse IP du serveur : pas d'identifiant, seulement l'expéditeur."""
+    app.config.update(SMTP_USER="", SMTP_PASSWORD="", SMTP_FROM="factures@asso.test")
+    assert mailer.smtp_enabled()
+    mailer.send("a@b.test", "Objet", "Texte")
+    assert smtp.credentials is None and "factures@asso.test" in smtp.sent[0]["From"]
+
+
+@pytest.mark.parametrize(
+    ("helo", "base_url", "expected"),
+    [
+        ("", "https://facture.asso.test", "facture.asso.test"),
+        ("", "https://facture.asso.test:8443/", "facture.asso.test"),
+        ("relais.asso.test", "https://facture.asso.test", "relais.asso.test"),
+        ("", "http://localhost:8002", None),
+        ("", "http://127.0.0.1:8002", None),
+        ("", "http://192.168.1.20:8002", None),
+        ("", "http://[::1]:8002", None),
+        ("", "", None),
+    ],
+)
+def test_ehlo_name(app, smtp, helo, base_url, expected):
+    """Un vrai nom de domaine, pas l'identifiant du conteneur Docker que smtplib annoncerait sinon."""
+    app.config.update(SMTP_HELO=helo, BASE_URL=base_url)
+    mailer.send("a@b.test", "Objet", "Texte")
+    assert smtp.connected[2] == expected
