@@ -1,5 +1,10 @@
 # Journal des versions
 
+## 0.4.3 — 20 novembre 2026
+
+- `SMTP_FROM` accepte la forme `Nom <adresse>`. Avant, l'appli ajoutait son propre nom autour de la valeur entière et le serveur recevait le nom à la place de l'adresse : le relais de Google refusait l'envoi (`553 5.1.7 The sender address … is not a valid RFC 5321 address`). Le nom s'affiche sur tous les emails, factures comprises ; sans nom dans `SMTP_FROM`, les factures portent comme avant celui de leur émetteur.
+- Un `SMTP_FROM` qui n'est pas une adresse email donne un message clair, sans rien envoyer au serveur.
+
 ## 0.4.2 — 20 novembre 2026
 
 - Emails compatibles avec le relais SMTP de Google Workspace (`smtp-relay.gmail.com`), autorisé par l'adresse IP du serveur ou par identifiant. L'appli s'annonce au serveur sous le domaine de `BASE_URL` (ou `SMTP_HELO`) au lieu du nom de la machine, l'identifiant du conteneur dans Docker, que le relais de Google peut refuser.

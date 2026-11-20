@@ -8,7 +8,7 @@ import ssl
 import threading
 from datetime import datetime, timedelta
 from email.message import EmailMessage
-from email.utils import formataddr
+from email.utils import formataddr, parseaddr
 from urllib.parse import urlsplit
 
 from flask import current_app, render_template
@@ -31,11 +31,13 @@ def smtp_enabled():
 def send(to, subject, text, html=None, attachments=(), sender_name=None, reply_to=None):
     """Envoie un email ; `html`, s'il est fourni, s'ajoute en alternative à la version texte.
 
-    `attachments` : [(nom, type MIME, contenu en octets)] ; `sender_name` remplace le nom de l'association dans
-    l'expéditeur, `reply_to` reçoit les réponses (l'adresse de l'émetteur d'une facture)."""
+    `attachments` : [(nom, type MIME, contenu en octets)] ; le nom de l'expéditeur est celui écrit dans SMTP_FROM,
+    sinon `sender_name` (l'émetteur d'une facture), sinon celui de l'association ; `reply_to` reçoit les réponses
+    (l'adresse de l'émetteur d'une facture)."""
     cfg = current_app.config
+    from_name, from_address = sender()
     message = EmailMessage()
-    message["From"] = formataddr((sender_name or branding.name(), cfg["SMTP_FROM"] or cfg["SMTP_USER"]))
+    message["From"] = formataddr((from_name or sender_name or branding.name(), from_address))
     message["To"] = to
     if reply_to:
         message["Reply-To"] = reply_to
@@ -49,7 +51,19 @@ def send(to, subject, text, html=None, attachments=(), sender_name=None, reply_t
     with _connect(cfg) as smtp:
         if cfg["SMTP_USER"]:
             smtp.login(cfg["SMTP_USER"], cfg["SMTP_PASSWORD"])
-        smtp.send_message(message)
+        smtp.send_message(message, from_addr=from_address)
+
+
+def sender():
+    """(nom, adresse) de SMTP_FROM, qui peut s'écrire « adresse » ou « Nom <adresse> » ; SMTP_USER à défaut."""
+    cfg = current_app.config
+    name, address = parseaddr(cfg["SMTP_FROM"] or cfg["SMTP_USER"])
+    if "@" not in address:
+        raise smtplib.SMTPException(
+            "SMTP_FROM (fichier .env) n'est pas une adresse email : "
+            "« factures@exemple.fr » ou « Nom <factures@exemple.fr> »."
+        )
+    return name, address
 
 
 IMPLICIT_TLS_PORT = 465
