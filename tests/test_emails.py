@@ -36,9 +36,10 @@ class FakeSMTP:
     def login(self, user, password):
         FakeSMTP.credentials = (user, password)
 
-    def send_message(self, message):
+    def send_message(self, message, from_addr=None):
         if FakeSMTP.fail:
             raise FakeSMTP.fail
+        FakeSMTP.envelope_from = from_addr
         FakeSMTP.sent.append(message)
 
 
@@ -204,3 +205,29 @@ def test_ehlo_name(app, smtp, helo, base_url, expected):
     app.config.update(SMTP_HELO=helo, BASE_URL=base_url)
     mailer.send("a@b.test", "Objet", "Texte")
     assert smtp.connected[2] == expected
+
+
+@pytest.mark.parametrize(
+    ("smtp_from", "sender_name", "expected_name"),
+    [
+        ("factures@asso.test", None, "Asso"),
+        ("Facturation Asso <factures@asso.test>", None, "Facturation Asso"),
+        ('"Facturation Asso" <factures@asso.test>', None, "Facturation Asso"),
+        ("Facturation Asso <factures@asso.test>", "Régie son", "Régie son"),
+    ],
+)
+def test_sender_address_with_or_without_a_name(app, smtp, monkeypatch, smtp_from, sender_name, expected_name):
+    """SMTP_FROM peut porter un nom : l'enveloppe ne reçoit que l'adresse (Google refusait « Nom » comme adresse)."""
+    monkeypatch.setattr(branding, "name", lambda: "Asso")
+    app.config.update(SMTP_FROM=smtp_from)
+    mailer.send("a@b.test", "Objet", "Texte", sender_name=sender_name)
+    sender = smtp.sent[0]["From"].addresses
+    assert smtp.envelope_from == "factures@asso.test"
+    assert len(sender) == 1 and sender[0].addr_spec == "factures@asso.test" and sender[0].display_name == expected_name
+
+
+def test_invalid_sender_address_gives_a_readable_error(app, smtp):
+    app.config.update(SMTP_FROM="Facturation Asso")
+    with pytest.raises(smtplib.SMTPException, match="SMTP_FROM"):
+        mailer.send("a@b.test", "Objet", "Texte")
+    assert not smtp.sent
